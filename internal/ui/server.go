@@ -226,6 +226,7 @@ const state = {
 let lastFp = "";
 
 function communityKey(n) {
+  if (n.type !== "terraform_module" && n.type !== "terraform_convention") return n.type;
   const parts = n.label.replace(/\\/g,"/").split("/").filter(Boolean);
   if (parts.length >= 2) return parts.slice(-2,-1)[0] + "/" + parts.slice(-1)[0];
   if (parts.length === 1) return parts[0];
@@ -542,8 +543,10 @@ function neighbors(id){
   return ids;
 }
 function shortName(label){
+  if(!label.includes("/"))return label;
   const parts=label.replace(/\\/g,"/").split("/").filter(Boolean);
-  if(parts.length<=2)return label;return parts.slice(-2).join("/");
+  if(parts.length<=2)return label;
+  return parts.slice(-2).join("/");
 }
 function clip(s){const n=shortName(s);return n.length<=24?n:n.slice(0,21)+"...";}
 function esc(s){return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");}

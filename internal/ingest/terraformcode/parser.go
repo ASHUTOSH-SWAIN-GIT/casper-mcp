@@ -65,6 +65,92 @@ func ParseDir(path string) ([]graph.Resource, error) {
 	return resources, nil
 }
 
+// ParseDirResources returns one graph.Resource per managed resource block
+// (e.g. resource "aws_vpc" "main") plus dependency edges derived from
+// HCL attribute references within the same module.
+func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error) {
+	dir := filepath.Clean(path)
+	if !tfconfig.IsModuleDir(dir) {
+		return nil, nil, nil
+	}
+
+	module, diagnostics := tfconfig.LoadModule(dir)
+	if diagnostics.HasErrors() {
+		return nil, nil, fmt.Errorf("parse terraform module %s: %s", dir, diagnostics.Error())
+	}
+
+	details, err := parseResourceBlockDetails(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	modulePath := moduleIdentifier(dir)
+
+	// Build lookup: "type.name" → ID for every resource in this module
+	knownRef := map[string]string{}
+	for _, r := range module.ManagedResources {
+		knownRef[r.Type+"."+r.Name] = resourceInstanceID(r.Type, r.Name, modulePath)
+	}
+
+	var resources []graph.Resource
+	for _, r := range module.ManagedResources {
+		resources = append(resources, graph.Resource{
+			ID:         resourceInstanceID(r.Type, r.Name, modulePath),
+			Source:     dir,
+			Type:       r.Type,
+			Identifier: r.Type + "." + r.Name,
+			Attributes: map[string]any{
+				"resource_type": r.Type,
+				"resource_name": r.Name,
+				"module_path":   modulePath,
+			},
+			Tags:       map[string]any{},
+			ModulePath: modulePath,
+			ManagedBy:  "terraform_code",
+		})
+	}
+
+	// Extract dependency edges: for each resource, scan its attribute values
+	// for references to other resources in this module.
+	detailIndex := indexResourceDetails(details)
+	var deps []graph.Dependency
+	for fromRef, fromID := range knownRef {
+		parts := strings.SplitN(fromRef, ".", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		detail, ok := detailIndex[resourceDetailKey(parts[0], parts[1])]
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, expr := range detail.Arguments {
+			for toRef, toID := range knownRef {
+				if toRef == fromRef || seen[toRef] {
+					continue
+				}
+				// Match "type.name." (attribute access) or "type.name[" (index)
+				if strings.Contains(expr, toRef+".") || strings.Contains(expr, toRef+"[") {
+					seen[toRef] = true
+					deps = append(deps, graph.Dependency{
+						FromResource: fromID,
+						ToResource:   toID,
+						Kind:         "reference",
+						Source:       dir,
+					})
+				}
+			}
+		}
+	}
+
+	return resources, deps, nil
+}
+
+func resourceInstanceID(resourceType, name, modulePath string) string {
+	sum := sha256.Sum256([]byte("terraform_resource:" + resourceType + "." + name + "@" + modulePath))
+	return "tfres_" + hex.EncodeToString(sum[:])[:24]
+}
+
 func moduleIdentifier(path string) string {
 	rel, err := filepath.Rel(".", path)
 	if err != nil {

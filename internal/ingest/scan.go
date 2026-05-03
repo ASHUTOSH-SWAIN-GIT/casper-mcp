@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
-
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 
@@ -35,43 +33,12 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 		return snapshot, err
 	}
 	for _, d := range moduleDirs {
-		resources, err := terraformcode.ParseDir(d)
+		resources, deps, err := terraformcode.ParseDirResources(d)
 		if err != nil {
 			continue
 		}
 		snapshot.Resources = append(snapshot.Resources, resources...)
-	}
-
-	// Second pass: build dependency edges from module_calls attributes.
-	// ParseDir stores call info inside Attributes but produces no Dependency rows.
-	moduleByDir := map[string]string{}
-	for _, r := range snapshot.Resources {
-		if r.Type == "terraform_module" {
-			moduleByDir[filepath.Clean(r.Source)] = r.ID
-		}
-	}
-	for _, r := range snapshot.Resources {
-		if r.Type != "terraform_module" {
-			continue
-		}
-		calls, _ := r.Attributes["module_calls"].([]map[string]any)
-		for _, call := range calls {
-			src, _ := call["source"].(string)
-			if src == "" || !strings.HasPrefix(src, ".") {
-				continue // skip registry / git sources
-			}
-			calledDir := filepath.Clean(filepath.Join(r.Source, src))
-			calledID, ok := moduleByDir[calledDir]
-			if !ok {
-				continue
-			}
-			snapshot.Dependencies = append(snapshot.Dependencies, graph.Dependency{
-				FromResource: r.ID,
-				ToResource:   calledID,
-				Kind:         "module_call",
-				Source:       r.Source,
-			})
-		}
+		snapshot.Dependencies = append(snapshot.Dependencies, deps...)
 	}
 
 	return snapshot, nil

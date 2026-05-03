@@ -106,6 +106,9 @@ const state={data:null,selectedId:null,filterComm:null,visibleIds:new Set(),pan:
 let vpEl=null;
 
 function communityKey(n){
+  // Infra resources: group by resource type (e.g. aws_vpc, aws_subnet)
+  if(n.type!=="terraform_module"&&n.type!=="terraform_convention")return n.type;
+  // Module/convention nodes: group by last path segment
   const parts=n.label.replace(/\\/g,"/").split("/").filter(Boolean);
   if(parts.length>=2)return parts.slice(-2,-1)[0]+"/"+parts.slice(-1)[0];
   if(parts.length===1)return parts[0];
@@ -240,7 +243,13 @@ window.addEventListener("mousemove",ev=>{if(!state.dragging)return;state.pan.x=s
 window.addEventListener("mouseup",()=>{state.dragging=false;svgEl.style.cursor="";});
 searchEl.addEventListener("input",()=>{if(!state.data)return;const q=searchEl.value.trim().toLowerCase();state.visibleIds=applyFilters(q,state.filterComm);if(state.selectedId&&!state.visibleIds.has(state.selectedId))state.selectedId=null;renderGraph(false);renderNodeInfo();renderCommList();});
 function neighbors(id){const ids=new Set();if(!id||!state.data)return ids;ids.add(id);for(const e of state.data.edges){if(e.from===id)ids.add(e.to);if(e.to===id)ids.add(e.from);}return ids;}
-function shortName(label){const parts=label.replace(/\\/g,"/").split("/").filter(Boolean);if(parts.length<=2)return label;return parts.slice(-2).join("/");}
+function shortName(label){
+  // "aws_vpc.main" → show as-is; path-based labels → last 2 segments
+  if(!label.includes("/"))return label;
+  const parts=label.replace(/\\/g,"/").split("/").filter(Boolean);
+  if(parts.length<=2)return label;
+  return parts.slice(-2).join("/");
+}
 function clip(s){const n=shortName(s);return n.length<=24?n:n.slice(0,21)+"...";}
 function esc(s){return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");}
 
