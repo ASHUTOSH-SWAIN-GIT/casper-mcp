@@ -109,23 +109,22 @@ func runIngest(ctx context.Context, args []string) error {
 
 func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	configPath := fs.String("config", ".casper/config.yaml", "path to Casper config")
+	dir := fs.String("dir", ".", "directory to scan for Terraform files")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	absDir, err := filepath.Abs(*dir)
 	if err != nil {
 		return err
 	}
 
-	pool, err := graph.Connect(ctx, cfg.Database.URL)
+	snapshot, err := ingest.Scan(absDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("scan %s: %w", absDir, err)
 	}
-	defer pool.Close()
 
-	return server.ServeStdio(mcpserver.New(graph.NewStore(pool)))
+	return server.ServeStdio(mcpserver.New(graph.NewMemStore(snapshot)))
 }
 
 func runUI(ctx context.Context, args []string) error {

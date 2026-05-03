@@ -11,7 +11,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 )
 
-func New(store *graph.Store) *server.MCPServer {
+func New(store graph.Querier) *server.MCPServer {
 	s := server.NewMCPServer(
 		"casper",
 		"0.1.0",
