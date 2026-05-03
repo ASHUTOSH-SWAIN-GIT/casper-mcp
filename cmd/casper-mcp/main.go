@@ -83,7 +83,13 @@ func runIngest(ctx context.Context, args []string) error {
 		return err
 	}
 
-	fmt.Printf("ingested %d files, %d resources, %d dependencies\n", summary.Files, summary.Resources, summary.Dependencies)
+	fmt.Printf(
+		"ingested %d state files, %d code modules, %d resources, %d dependencies\n",
+		summary.StateFiles,
+		summary.CodeModules,
+		summary.Resources,
+		summary.Dependencies,
+	)
 	return nil
 }
 
