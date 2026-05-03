@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 
@@ -43,7 +44,9 @@ func ParseDir(path string) ([]graph.Resource, error) {
 		ManagedBy:  "terraform_code",
 	}
 
-	return []graph.Resource{resource}, nil
+	resources := []graph.Resource{resource}
+	resources = append(resources, conventionResources(identifier, module)...)
+	return resources, nil
 }
 
 func moduleIdentifier(path string) string {
@@ -145,6 +148,92 @@ func moduleCalls(module *tfconfig.Module) []map[string]any {
 		})
 	}
 	return result
+}
+
+func conventionResources(modulePath string, module *tfconfig.Module) []graph.Resource {
+	byType := map[string][]*tfconfig.Resource{}
+	for _, resource := range module.ManagedResources {
+		byType[resource.Type] = append(byType[resource.Type], resource)
+	}
+
+	resourceTypes := sortedKeys(byType)
+	result := make([]graph.Resource, 0, len(resourceTypes))
+	variableNames := sortedKeys(module.Variables)
+
+	for _, resourceType := range resourceTypes {
+		managed := byType[resourceType]
+		identifier := fmt.Sprintf("%s@%s", resourceType, modulePath)
+		result = append(result, graph.Resource{
+			ID:         conventionID(resourceType, modulePath),
+			Source:     module.Path,
+			Type:       "terraform_convention",
+			Identifier: identifier,
+			Attributes: map[string]any{
+				"resource_type":    resourceType,
+				"module_path":      modulePath,
+				"resource_names":   managedResourceNames(managed),
+				"common_inputs":    variableNames,
+				"naming_signals":   filterSignals(variableNames, "name", "identifier", "prefix", "suffix"),
+				"tag_signals":      filterSignals(variableNames, "tag"),
+				"network_signals":  filterSignals(variableNames, "vpc", "subnet", "security_group", "sg"),
+				"behavior_signals": filterSignals(variableNames, "apply", "deletion", "public", "multi_az", "replica"),
+				"provider_signals": requiredProviders(module),
+				"module_examples":  []string{modulePath},
+				"supports_tagging": hasAny(variableNames, "tag"),
+				"supports_network": hasAny(variableNames, "vpc", "subnet", "security_group", "sg"),
+				"supports_naming":  hasAny(variableNames, "name", "identifier", "prefix", "suffix"),
+				"supports_replica": hasAny(variableNames, "replica"),
+			},
+			Tags:       map[string]any{},
+			ModulePath: modulePath,
+			ManagedBy:  "terraform_code",
+		})
+	}
+
+	return result
+}
+
+func conventionID(resourceType, modulePath string) string {
+	sum := sha256.Sum256([]byte("terraform_convention:" + resourceType + ":" + modulePath))
+	return "tfconv_" + hex.EncodeToString(sum[:])[:24]
+}
+
+func managedResourceNames(resources []*tfconfig.Resource) []string {
+	names := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		names = append(names, resource.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func filterSignals(values []string, needles ...string) []string {
+	var result []string
+	for _, value := range values {
+		if containsAny(value, needles...) {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func hasAny(values []string, needles ...string) bool {
+	for _, value := range values {
+		if containsAny(value, needles...) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(value string, needles ...string) bool {
+	lower := strings.ToLower(value)
+	for _, needle := range needles {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedKeys[V any](values map[string]V) []string {

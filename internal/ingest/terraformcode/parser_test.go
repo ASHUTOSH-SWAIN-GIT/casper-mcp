@@ -7,8 +7,8 @@ func TestParseDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseDir() error = %v", err)
 	}
-	if len(resources) != 1 {
-		t.Fatalf("expected 1 module resource, got %d", len(resources))
+	if len(resources) != 2 {
+		t.Fatalf("expected 2 resources, got %d", len(resources))
 	}
 
 	module := resources[0]
@@ -28,5 +28,20 @@ func TestParseDir(t *testing.T) {
 	}
 	if managedResources[0]["type"] != "aws_db_instance" {
 		t.Fatalf("expected aws_db_instance, got %v", managedResources[0]["type"])
+	}
+
+	convention := resources[1]
+	if convention.Type != "terraform_convention" {
+		t.Fatalf("expected terraform_convention, got %q", convention.Type)
+	}
+	if convention.Attributes["resource_type"] != "aws_db_instance" {
+		t.Fatalf("expected resource_type aws_db_instance, got %v", convention.Attributes["resource_type"])
+	}
+	namingSignals, ok := convention.Attributes["naming_signals"].([]string)
+	if !ok {
+		t.Fatalf("naming_signals has unexpected type %T", convention.Attributes["naming_signals"])
+	}
+	if len(namingSignals) == 0 || namingSignals[0] != "name" {
+		t.Fatalf("expected naming signal name, got %v", namingSignals)
 	}
 }

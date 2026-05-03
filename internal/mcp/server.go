@@ -106,5 +106,34 @@ func New(store *graph.Store) *server.MCPServer {
 		},
 	)
 
+	s.AddTool(
+		mcp.NewTool(
+			"get_conventions",
+			mcp.WithDescription("Summarize Terraform code conventions for a given resource type."),
+			mcp.WithString("resource_type", mcp.Required(), mcp.Description("Terraform resource type, such as aws_db_instance or aws_security_group.")),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			resourceType, err := request.RequireString("resource_type")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			conventions, err := store.FindConventions(ctx, resourceType, 10)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if len(conventions) == 0 {
+				return mcp.NewToolResultText(fmt.Sprintf("No Terraform conventions found for %q.", resourceType)), nil
+			}
+
+			payload, err := json.MarshalIndent(conventions, "", "  ")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			return mcp.NewToolResultText(string(payload)), nil
+		},
+	)
+
 	return s
 }

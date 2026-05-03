@@ -208,6 +208,50 @@ func (s *Store) FindModules(ctx context.Context, intent string, limit int) ([]Re
 	return modules, nil
 }
 
+func (s *Store) FindConventions(ctx context.Context, resourceType string, limit int) ([]Resource, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, source, type, identifier, attributes, tags, COALESCE(module_path, ''), managed_by, last_seen
+		FROM resources
+		WHERE type = 'terraform_convention'
+			AND managed_by = 'terraform_code'
+			AND (
+				identifier ILIKE '%' || $1 || '%'
+				OR attributes ->> 'resource_type' = $1
+				OR attributes::text ILIKE '%' || $1 || '%'
+			)
+		ORDER BY
+			CASE
+				WHEN attributes ->> 'resource_type' = $1 THEN 0
+				WHEN identifier ILIKE $1 || '@%' THEN 1
+				WHEN identifier ILIKE '%' || $1 || '%' THEN 2
+				ELSE 3
+			END,
+			identifier
+		LIMIT $2
+	`, resourceType, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query conventions: %w", err)
+	}
+	defer rows.Close()
+
+	var conventions []Resource
+	for rows.Next() {
+		resource, err := scanResource(rows)
+		if err != nil {
+			return nil, err
+		}
+		conventions = append(conventions, resource)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate conventions: %w", err)
+	}
+	return conventions, nil
+}
+
 func (s *Store) GetDependencies(ctx context.Context, resourceID string) ([]DependencyResult, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
