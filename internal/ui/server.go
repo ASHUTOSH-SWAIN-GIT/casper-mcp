@@ -298,7 +298,9 @@ function applyFilters(q, comm) {
 }
 
 function prepare(data) {
-  const W=1800, H=1600;
+  const N = data.nodes.length;
+  const W = Math.max(1800, Math.ceil(Math.sqrt(N)*130));
+  const H = Math.round(W*0.88);
   const communities = buildCommunities(data.nodes);
   const nodes = data.nodes.map(n => ({
     ...n,
@@ -313,28 +315,28 @@ function prepare(data) {
 
 function layout() {
   const {nodes, edges, W, H} = state.data;
+  const N = nodes.length;
   const comms = [...state.data.communities.entries()].sort((a,b)=>b[1].ids.length-a[1].ids.length);
   const cx = W/2, cy = H/2;
+  const cs = Math.max(1, Math.sqrt(comms.length/5));
 
-  // Place community centers: top 2 near center, rest in rings
   const centers = new Map();
   comms.forEach(([key, c], i) => {
     let r, angle;
     if (i === 0) { r = 0; angle = 0; }
     else if (i <= 6) {
-      r = 120 + c.ids.length * 4;
+      r = (100 + c.ids.length*5) * cs;
       angle = (2*Math.PI*(i-1)/6) - Math.PI/2;
     } else if (i <= 16) {
-      r = 240 + c.ids.length * 3;
+      r = (220 + c.ids.length*4) * cs;
       angle = (2*Math.PI*(i-7)/10) - Math.PI/6;
     } else {
-      r = 380;
+      r = (360 + Math.floor((i-17)/10)*120) * cs;
       angle = (2*Math.PI*(i-17)/Math.max(comms.length-17,1));
     }
     centers.set(key, { x: cx + r*Math.cos(angle), y: cy + r*Math.sin(angle) });
   });
 
-  // Pack nodes within each community in concentric rings
   const byComm = new Map();
   for (const [key] of comms) byComm.set(key, []);
   for (const n of nodes) byComm.get(n.community)?.push(n);
@@ -342,35 +344,44 @@ function layout() {
   for (const [key, members] of byComm) {
     const center = centers.get(key) || {x:cx, y:cy};
     const total = members.length;
-    if (total === 1) {
-      members[0].x = center.x; members[0].y = center.y;
-      continue;
-    }
-    // Sunflower/ring packing
+    if (total === 1) { members[0].x = center.x; members[0].y = center.y; continue; }
+    const spacing = Math.max(20, Math.sqrt(total)*7);
     members.forEach((n, i) => {
       if (i === 0) { n.x = center.x; n.y = center.y; return; }
       const ring = Math.ceil((Math.sqrt(4*i+1)-1)/2);
       const ringStart = ring*(ring-1);
       const ringTotal = ring*6 < total-ringStart ? ring*6 : total-ringStart;
       const ringIdx = i - ringStart - 1;
-      const r = ring * 16;
+      const r = ring * spacing;
       const angle = (2*Math.PI*ringIdx/Math.max(ringTotal,1));
-      n.x = center.x + r*Math.cos(angle) + (Math.random()-0.5)*4;
-      n.y = center.y + r*Math.sin(angle) + (Math.random()-0.5)*4;
+      n.x = center.x + r*Math.cos(angle) + (Math.random()-0.5)*3;
+      n.y = center.y + r*Math.sin(angle) + (Math.random()-0.5)*3;
     });
   }
 
-  // Light force pass just to resolve edge springs and minor overlaps
-  for (let s=0; s<40; s++) {
-    for (const n of nodes) {n.vx*=0.7;n.vy*=0.7;}
+  const minSep = 24;
+  for (let s=0; s<60; s++) {
+    for (const n of nodes) { n.vx*=0.6; n.vy*=0.6; }
     for (const e of edges) {
-      const a=state.data.nodeById.get(e.from),b=state.data.nodeById.get(e.to);
-      if(!a||!b)continue;
-      const dx=b.x-a.x,dy=b.y-a.y,d=Math.max(Math.hypot(dx,dy),1);
-      const f=(d-60)*0.04,fx=dx/d*f,fy=dy/d*f;
-      a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy;
+      const a=state.data.nodeById.get(e.from), b=state.data.nodeById.get(e.to);
+      if (!a||!b) continue;
+      const dx=b.x-a.x, dy=b.y-a.y, d=Math.max(Math.hypot(dx,dy),1);
+      const f=(d-50)*0.025, fx=dx/d*f, fy=dy/d*f;
+      a.vx+=fx; a.vy+=fy; b.vx-=fx; b.vy-=fy;
     }
-    for (const n of nodes) {n.x+=n.vx;n.y+=n.vy;}
+    if (N <= 600) {
+      for (let i=0; i<nodes.length; i++) {
+        for (let j=i+1; j<nodes.length; j++) {
+          const a=nodes[i], b=nodes[j];
+          const dx=b.x-a.x, dy=b.y-a.y, d=Math.max(Math.hypot(dx,dy),0.1);
+          if (d < minSep) {
+            const f=(minSep-d)/d*0.5;
+            a.vx-=dx*f; a.vy-=dy*f; b.vx+=dx*f; b.vy+=dy*f;
+          }
+        }
+      }
+    }
+    for (const n of nodes) { n.x+=n.vx; n.y+=n.vy; }
   }
 }
 
