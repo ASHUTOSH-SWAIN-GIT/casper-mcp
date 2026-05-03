@@ -297,7 +297,7 @@ function applyFilters(q, comm) {
 }
 
 function prepare(data) {
-  const W=3200, H=2600;
+  const W=1800, H=1600;
   const communities = buildCommunities(data.nodes);
   const nodes = data.nodes.map(n => ({
     ...n,
@@ -321,14 +321,14 @@ function layout() {
     let r, angle;
     if (i === 0) { r = 0; angle = 0; }
     else if (i <= 6) {
-      r = 280 + c.ids.length * 3;
+      r = 120 + c.ids.length * 4;
       angle = (2*Math.PI*(i-1)/6) - Math.PI/2;
     } else if (i <= 16) {
-      r = 560 + c.ids.length * 2;
+      r = 240 + c.ids.length * 3;
       angle = (2*Math.PI*(i-7)/10) - Math.PI/6;
     } else {
-      r = 820;
-      angle = (2*Math.PI*(i-17)/(comms.length-17));
+      r = 380;
+      angle = (2*Math.PI*(i-17)/Math.max(comms.length-17,1));
     }
     centers.set(key, { x: cx + r*Math.cos(angle), y: cy + r*Math.sin(angle) });
   });
@@ -352,7 +352,7 @@ function layout() {
       const ringStart = ring*(ring-1);
       const ringTotal = ring*6 < total-ringStart ? ring*6 : total-ringStart;
       const ringIdx = i - ringStart - 1;
-      const r = ring * 20;
+      const r = ring * 16;
       const angle = (2*Math.PI*ringIdx/Math.max(ringTotal,1));
       n.x = center.x + r*Math.cos(angle) + (Math.random()-0.5)*4;
       n.y = center.y + r*Math.sin(angle) + (Math.random()-0.5)*4;
