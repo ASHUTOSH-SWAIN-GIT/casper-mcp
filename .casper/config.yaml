@@ -1,5 +1,5 @@
 database:
-  url: postgres://casper:casper@localhost:5432/casper?sslmode=disable
+  url: postgres://casper:casper@localhost:55432/casper?sslmode=disable
 
 states:
   - type: local

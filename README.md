@@ -10,6 +10,8 @@ Start Postgres:
 docker compose up -d postgres
 ```
 
+The local Postgres container is exposed on host port `55432` to avoid clashing with a system Postgres on `5432`.
+
 Apply migrations:
 
 ```sh
