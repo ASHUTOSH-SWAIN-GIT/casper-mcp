@@ -1,10 +1,12 @@
 package ingest
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 
@@ -32,7 +34,16 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 	if err != nil {
 		return snapshot, err
 	}
-	for _, d := range moduleDirs {
+
+	// Include downloaded child modules from any terraform init that has been run.
+	// Deduplicates so the same source isn't indexed twice.
+	allDirs := append(moduleDirs, childModuleDirs(moduleDirs)...)
+	seen := map[string]struct{}{}
+	for _, d := range allDirs {
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
 		resources, deps, err := terraformcode.ParseDirResources(d)
 		if err != nil {
 			continue
@@ -42,6 +53,58 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 	}
 
 	return snapshot, nil
+}
+
+// childModuleDirs reads .terraform/modules/modules.json next to each component
+// dir and returns the paths of downloaded child modules. Only called when
+// terraform init has already been run — silently returns nothing otherwise.
+func childModuleDirs(componentDirs []string) []string {
+	type moduleEntry struct {
+		Key    string `json:"Key"`
+		Source string `json:"Source"`
+		Dir    string `json:"Dir"`
+	}
+	type modulesFile struct {
+		Modules []moduleEntry `json:"Modules"`
+	}
+
+	seenSource := map[string]struct{}{} // deduplicate by source string
+	var result []string
+
+	for _, compDir := range componentDirs {
+		data, err := os.ReadFile(filepath.Join(compDir, ".terraform", "modules", "modules.json"))
+		if err != nil {
+			continue // terraform init not run here
+		}
+		var mf modulesFile
+		if err := json.Unmarshal(data, &mf); err != nil {
+			continue
+		}
+		for _, mod := range mf.Modules {
+			if mod.Dir == "" || mod.Dir == "." {
+				continue
+			}
+			// Deduplicate: same registry source (e.g. cloudposse/rds/aws 1.1.0)
+			// shouldn't be scanned multiple times from different component dirs.
+			srcKey := mod.Source
+			if srcKey == "" {
+				srcKey = mod.Dir
+			}
+			if _, ok := seenSource[srcKey]; ok {
+				continue
+			}
+			seenSource[srcKey] = struct{}{}
+
+			absDir := filepath.Clean(filepath.Join(compDir, mod.Dir))
+			if !tfconfig.IsModuleDir(absDir) {
+				continue
+			}
+			result = append(result, absDir)
+		}
+	}
+
+	sort.Strings(result)
+	return result
 }
 
 func findModuleDirs(root string) ([]string, error) {
