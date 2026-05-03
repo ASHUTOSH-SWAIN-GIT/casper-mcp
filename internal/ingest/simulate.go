@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,9 +13,10 @@ import (
 )
 
 // SimulateImpact parses proposedCode as Terraform HCL, diffs it against the
-// current snapshot, and returns which resources would be created or modified
-// and what the downstream blast radius is.
-func SimulateImpact(current graph.GraphSnapshot, proposedCode string) (*graph.ImpactResult, error) {
+// current snapshot, and returns which resources would be created or modified,
+// what the downstream blast radius is, broken-reference warnings, and similar
+// examples from the repo for each proposed resource type.
+func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, proposedCode string) (*graph.ImpactResult, error) {
 	// Write proposed code to a temp dir so the HCL parser can read it
 	tmpDir, err := os.MkdirTemp("", "casper-sim-*")
 	if err != nil {
@@ -123,17 +125,101 @@ func SimulateImpact(current graph.GraphSnapshot, proposedCode string) (*graph.Im
 		return blast[i].Identifier < blast[j].Identifier
 	})
 
+	// Broken-reference warnings: proposed args reference type.name that isn't in current graph
+	var warnings []string
+	for _, prop := range proposed {
+		args, _ := prop.Attributes["arguments"].(map[string]string)
+		for argKey, expr := range args {
+			for _, ref := range extractResourceRefs(expr) {
+				if _, ok := currentByIdent[ref]; !ok {
+					warnings = append(warnings, fmt.Sprintf(
+						"%s.%s: argument %q references %q which is not in the current graph",
+						argKey, prop.Identifier, argKey, ref,
+					))
+				}
+			}
+		}
+	}
+	sort.Strings(warnings)
+
+	// Similar examples: for each proposed resource type, find matching examples in repo
+	var similarExamples map[string][]graph.SimilarExample
+	if querier != nil {
+		ctx := context.Background()
+		seenType := map[string]bool{}
+		for _, prop := range proposed {
+			if seenType[prop.Type] {
+				continue
+			}
+			seenType[prop.Type] = true
+			similar, err := querier.FindSimilar(ctx, prop.Type, 3)
+			if err != nil || len(similar) == 0 {
+				continue
+			}
+			if similarExamples == nil {
+				similarExamples = make(map[string][]graph.SimilarExample)
+			}
+			for _, s := range similar {
+				args, _ := s.Attributes["arguments"].(map[string]string)
+				ex := graph.SimilarExample{
+					Identifier: s.Identifier,
+					ModulePath: s.ModulePath,
+					Arguments:  args,
+				}
+				similarExamples[prop.Type] = append(similarExamples[prop.Type], ex)
+			}
+		}
+	}
+
 	summary := fmt.Sprintf(
 		"%d resource(s) to create, %d to modify, %d in blast radius",
 		len(created), len(modified), len(blast),
 	)
 
 	return &graph.ImpactResult{
-		Summary:     summary,
-		Created:     created,
-		Modified:    modified,
-		BlastRadius: blast,
+		Summary:         summary,
+		Created:         created,
+		Modified:        modified,
+		BlastRadius:     blast,
+		Warnings:        warnings,
+		SimilarExamples: similarExamples,
 	}, nil
+}
+
+// extractResourceRefs pulls "type.name" references out of an HCL expression string.
+// It looks for tokens matching the pattern word.word that appear in resource references.
+func extractResourceRefs(expr string) []string {
+	var refs []string
+	// Split on common delimiters and look for word.word patterns
+	parts := strings.FieldsFunc(expr, func(r rune) bool {
+		return r == '"' || r == ' ' || r == '\t' || r == '\n' || r == ',' || r == '(' || r == ')' || r == '[' || r == ']'
+	})
+	for _, part := range parts {
+		// A resource reference looks like "type.name" or "type.name.attribute"
+		// We want just the first two segments
+		segments := strings.SplitN(part, ".", 3)
+		if len(segments) >= 2 && isIdentifier(segments[0]) && isIdentifier(segments[1]) {
+			// Skip known non-resource prefixes
+			switch segments[0] {
+			case "var", "local", "data", "module", "path", "each", "count", "self":
+				continue
+			}
+			refs = append(refs, segments[0]+"."+segments[1])
+		}
+	}
+	return refs
+}
+
+func isIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func diffArguments(cur, prop graph.Resource) *graph.ResourceDiff {

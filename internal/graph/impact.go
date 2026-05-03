@@ -3,10 +3,19 @@ package graph
 // ImpactResult is the output of SimulateImpact — what would change in the
 // graph if the proposed Terraform were applied.
 type ImpactResult struct {
-	Summary     string         `json:"summary"`
-	Created     []ResourceDiff `json:"created"`
-	Modified    []ResourceDiff `json:"modified"`
-	BlastRadius []BlastItem    `json:"blast_radius"`
+	Summary        string                       `json:"summary"`
+	Created        []ResourceDiff               `json:"created,omitempty"`
+	Modified       []ResourceDiff               `json:"modified,omitempty"`
+	BlastRadius    []BlastItem                  `json:"blast_radius,omitempty"`
+	Warnings       []string                     `json:"warnings,omitempty"`
+	SimilarExamples map[string][]SimilarExample `json:"similar_examples,omitempty"`
+}
+
+// SimilarExample is a concise view of an existing resource used as a reference.
+type SimilarExample struct {
+	Identifier string            `json:"identifier"`
+	ModulePath string            `json:"module_path,omitempty"`
+	Arguments  map[string]string `json:"arguments,omitempty"`
 }
 
 // ResourceDiff describes a single resource that would be created or modified.

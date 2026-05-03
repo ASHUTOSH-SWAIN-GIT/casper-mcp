@@ -124,11 +124,12 @@ func runServe(ctx context.Context, args []string) error {
 		return fmt.Errorf("scan %s: %w", absDir, err)
 	}
 
+	memStore := graph.NewMemStore(snapshot)
 	simulate := func(code string) (*graph.ImpactResult, error) {
-		return ingest.SimulateImpact(snapshot, code)
+		return ingest.SimulateImpact(snapshot, memStore, code)
 	}
 
-	return server.ServeStdio(mcpserver.New(graph.NewMemStore(snapshot), simulate))
+	return server.ServeStdio(mcpserver.New(memStore, simulate))
 }
 
 func runUI(ctx context.Context, args []string) error {
