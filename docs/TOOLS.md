@@ -121,6 +121,7 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 | `warnings` | Broken references: proposed args reference a `type.name` not in the current graph |
 | `similar_examples` | For each proposed resource type, up to 3 real examples from the repo with their HCL arguments |
 | `reversibility_context` | Per-resource facts the agent uses to reason about rollback risk (see below) |
+| `policy_violations` | List of org policy rules violated by the proposed change (see below) |
 
 **`reversibility_context.resources[]` fields:**
 
@@ -139,4 +140,16 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 | `depends_on` | Identifiers this proposed resource references — must exist for rollback to succeed |
 | `recent_commits` | Last 3 git commits that touched this resource block (hash, message, author, date). Uses git pickaxe to find exact changes to the block; falls back to recent `.tf` commits in the module dir. Only populated for modify and destroy operations. |
 
-**When to use:** After drafting Terraform, before asking the user to apply it — to validate correctness, understand side effects, and reason about whether each change can be safely rolled back.
+**`policy_violations[]` fields:**
+
+| Field | Description |
+|-------|-------------|
+| `policy_id` | ID from `.casper/policies.yaml` |
+| `resource` | Resource identifier (e.g. `aws_db_instance.orders`) |
+| `type` | Resource type |
+| `message` | Policy-level description of what the rule enforces |
+| `details` | Specific failure reason (e.g. `argument "deletion_protection" must be "true" (not set)`) |
+
+Policies are defined in `.casper/policies.yaml` in the scanned repo. Supported rule types: `must_equal`, `must_not_equal`, `required`, `min_value`. Applies to `resource` (specific type) or `"*"` (all types).
+
+**When to use:** After drafting Terraform, before asking the user to apply it — to validate correctness, understand side effects, check org policy compliance, and reason about whether each change can be safely rolled back.

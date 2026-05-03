@@ -10,6 +10,16 @@ type ImpactResult struct {
 	Warnings             []string                     `json:"warnings,omitempty"`
 	SimilarExamples      map[string][]SimilarExample  `json:"similar_examples,omitempty"`
 	ReversibilityContext *ReversibilityContext         `json:"reversibility_context,omitempty"`
+	PolicyViolations     []PolicyViolation            `json:"policy_violations,omitempty"`
+}
+
+// PolicyViolation is a single policy rule that the proposed change violates.
+type PolicyViolation struct {
+	PolicyID string `json:"policy_id"`
+	Resource string `json:"resource"` // identifier e.g. aws_db_instance.orders
+	Type     string `json:"type"`
+	Message  string `json:"message"` // policy-level description
+	Details  string `json:"details"` // specific rule failure
 }
 
 // SimilarExample is a concise view of an existing resource used as a reference.

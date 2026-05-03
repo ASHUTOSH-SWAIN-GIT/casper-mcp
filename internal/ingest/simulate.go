@@ -16,13 +16,14 @@ import (
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest/terraformcode"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
 )
 
 // SimulateImpact parses proposedCode as Terraform HCL, diffs it against the
 // current snapshot, and returns which resources would be created or modified,
 // what the downstream blast radius is, broken-reference warnings, and similar
 // examples from the repo for each proposed resource type.
-func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, proposedCode string) (*graph.ImpactResult, error) {
+func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies []policy.Policy, proposedCode string) (*graph.ImpactResult, error) {
 	// Write proposed code to a temp dir so the HCL parser can read it
 	tmpDir, err := os.MkdirTemp("", "casper-sim-*")
 	if err != nil {
@@ -185,6 +186,21 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, proposed
 	// Reversibility context: per-resource facts for the agent to reason about rollback
 	revCtx := buildReversibilityContext(proposed, current, currentByIdent, currentByID, dependentOf, tmpDir)
 
+	// Policy violations: check created and modified resources against org policies
+	var policyViolations []graph.PolicyViolation
+	for _, prop := range proposed {
+		args, _ := prop.Attributes["arguments"].(map[string]string)
+		for _, v := range policy.Check(policies, prop.Type, prop.Identifier, args) {
+			policyViolations = append(policyViolations, graph.PolicyViolation{
+				PolicyID: v.PolicyID,
+				Resource: v.Resource,
+				Type:     v.Type,
+				Message:  v.Message,
+				Details:  v.Details,
+			})
+		}
+	}
+
 	return &graph.ImpactResult{
 		Summary:              summary,
 		Created:              created,
@@ -193,6 +209,7 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, proposed
 		Warnings:             warnings,
 		SimilarExamples:      similarExamples,
 		ReversibilityContext: revCtx,
+		PolicyViolations:     policyViolations,
 	}, nil
 }
 

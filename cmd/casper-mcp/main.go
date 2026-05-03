@@ -20,6 +20,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/mcp"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/migrations"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ui"
 )
 
@@ -127,8 +128,13 @@ func runServe(ctx context.Context, args []string) error {
 
 	liveStore := graph.NewLiveStore(snapshot)
 
+	policies, err := policy.Load(absDir)
+	if err != nil {
+		log.Printf("casper: policy load warning: %v", err)
+	}
+
 	simulate := func(code string) (*graph.ImpactResult, error) {
-		return ingest.SimulateImpact(liveStore.Snapshot(), liveStore, code)
+		return ingest.SimulateImpact(liveStore.Snapshot(), liveStore, policies, code)
 	}
 
 	go func() {
