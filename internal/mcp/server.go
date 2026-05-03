@@ -11,7 +11,9 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 )
 
-func New(store graph.Querier) *server.MCPServer {
+type SimulateFunc func(code string) (*graph.ImpactResult, error)
+
+func New(store graph.Querier, simulate SimulateFunc) *server.MCPServer {
 	s := server.NewMCPServer(
 		"casper",
 		"0.1.0",
@@ -163,6 +165,34 @@ func New(store graph.Querier) *server.MCPServer {
 			return mcp.NewToolResultText(string(payload)), nil
 		},
 	)
+
+	if simulate != nil {
+		s.AddTool(
+			mcp.NewTool(
+				"simulate_impact",
+				mcp.WithDescription("Parse proposed Terraform HCL and show what would change in the infrastructure graph: which resources get created or modified, and what currently-deployed resources are in the blast radius."),
+				mcp.WithString("code", mcp.Required(), mcp.Description("Proposed Terraform HCL code — one or more resource blocks.")),
+			),
+			func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				code, err := request.RequireString("code")
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+
+				result, err := simulate(code)
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+
+				payload, err := json.MarshalIndent(result, "", "  ")
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+
+				return mcp.NewToolResultText(string(payload)), nil
+			},
+		)
+	}
 
 	return s
 }
