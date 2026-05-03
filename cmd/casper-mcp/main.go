@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -45,6 +46,8 @@ func run(ctx context.Context, args []string) error {
 		return runUI(ctx, args[2:])
 	case "watch":
 		return runWatch(ctx, args[2:])
+	case "export":
+		return runExport(ctx, args[2:])
 	default:
 		return usage()
 	}
@@ -246,6 +249,55 @@ func isTerraformFile(name string) bool {
 		strings.HasSuffix(base, ".tfstate.backup")
 }
 
+func runExport(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	dir := fs.String("dir", ".", "directory to scan for Terraform files")
+	output := fs.String("output", "casper-graph.html", "output HTML file path")
+	open := fs.Bool("open", true, "open the HTML file in the browser after export")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	absDir, err := filepath.Abs(*dir)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("scanning %s...\n", absDir)
+	snapshot, err := ingest.Scan(absDir)
+	if err != nil {
+		return fmt.Errorf("scan: %w", err)
+	}
+
+	fmt.Printf("found %d resources, %d dependencies\n", len(snapshot.Resources), len(snapshot.Dependencies))
+
+	absOut, err := filepath.Abs(*output)
+	if err != nil {
+		return err
+	}
+
+	if err := ui.Export(snapshot, absOut); err != nil {
+		return fmt.Errorf("export: %w", err)
+	}
+
+	fmt.Printf("exported → %s\n", absOut)
+
+	if *open {
+		openBrowser(absOut)
+	}
+	return nil
+}
+
+func openBrowser(path string) {
+	// file:// URL
+	url := "file://" + path
+	for _, cmd := range []string{"open", "xdg-open", "start"} {
+		if err := exec.Command(cmd, url).Start(); err == nil {
+			return
+		}
+	}
+}
+
 func usage() error {
-	return fmt.Errorf("usage: casper-mcp <migrate|ingest|serve|ui|watch> --config .casper/config.yaml")
+	return fmt.Errorf("usage: casper-mcp <migrate|ingest|serve|ui|watch|export> [flags]")
 }
