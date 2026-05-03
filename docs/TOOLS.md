@@ -98,5 +98,22 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 | `blast_radius` | Currently-deployed resources that reference a modified resource (downstream), or that a new resource will reference (upstream) |
 | `warnings` | Broken references: proposed args reference a `type.name` not in the current graph |
 | `similar_examples` | For each proposed resource type, up to 3 real examples from the repo with their HCL arguments |
+| `reversibility_context` | Per-resource facts the agent uses to reason about rollback risk (see below) |
 
-**When to use:** After drafting Terraform, before asking the user to apply it — to validate correctness and understand side effects.
+**`reversibility_context.resources[]` fields:**
+
+| Field | Description |
+|-------|-------------|
+| `operation` | `create`, `modify`, or `destroy` |
+| `current_args` | Arguments as they exist in the graph right now |
+| `proposed_args` | Arguments as they would be after apply |
+| `changed_args` | Per-argument before/after diff (modify only) |
+| `added_args` | New arguments being added (modify only) |
+| `removed_args` | Arguments being removed (modify only) |
+| `lifecycle_flags.prevent_destroy` | Whether the proposed block has `lifecycle { prevent_destroy = true }` |
+| `lifecycle_flags.create_before_destroy` | Whether the proposed block has `lifecycle { create_before_destroy = true }` |
+| `lifecycle_flags.deletion_protection` | Whether `deletion_protection = true` is set in the resource args |
+| `dependents` | Identifiers of existing resources that reference this one — affected by a rollback |
+| `depends_on` | Identifiers this proposed resource references — must exist for rollback to succeed |
+
+**When to use:** After drafting Terraform, before asking the user to apply it — to validate correctness, understand side effects, and reason about whether each change can be safely rolled back.

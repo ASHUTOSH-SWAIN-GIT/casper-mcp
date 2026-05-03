@@ -8,6 +8,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty"
+
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest/terraformcode"
 )
@@ -176,14 +180,178 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, proposed
 		len(created), len(modified), len(blast),
 	)
 
+	// Reversibility context: per-resource facts for the agent to reason about rollback
+	revCtx := buildReversibilityContext(proposed, current, currentByIdent, currentByID, dependentOf, tmpDir)
+
 	return &graph.ImpactResult{
-		Summary:         summary,
-		Created:         created,
-		Modified:        modified,
-		BlastRadius:     blast,
-		Warnings:        warnings,
-		SimilarExamples: similarExamples,
+		Summary:              summary,
+		Created:              created,
+		Modified:             modified,
+		BlastRadius:          blast,
+		Warnings:             warnings,
+		SimilarExamples:      similarExamples,
+		ReversibilityContext: revCtx,
 	}, nil
+}
+
+func buildReversibilityContext(
+	proposed []graph.Resource,
+	current graph.GraphSnapshot,
+	currentByIdent map[string]graph.Resource,
+	currentByID map[string]graph.Resource,
+	dependentOf map[string][]string,
+	tmpDir string,
+) *graph.ReversibilityContext {
+	// Parse the raw HCL file for lifecycle block extraction
+	hclBody := parseHCLBody(filepath.Join(tmpDir, "proposed.tf"))
+
+	proposedIdents := map[string]bool{}
+	var contexts []graph.ResourceContext
+
+	for _, prop := range proposed {
+		proposedIdents[prop.Identifier] = true
+		propArgs, _ := prop.Attributes["arguments"].(map[string]string)
+
+		rc := graph.ResourceContext{
+			Identifier:     prop.Identifier,
+			Type:           prop.Type,
+			ProposedArgs:   propArgs,
+			LifecycleFlags: extractLifecycleFlags(hclBody, prop.Type, resourceNameFromIdent(prop.Identifier)),
+		}
+
+		// deletion_protection from proposed args
+		if propArgs["deletion_protection"] == "true" {
+			rc.LifecycleFlags.DeletionProtection = true
+		}
+
+		if cur, exists := currentByIdent[prop.Identifier]; exists {
+			rc.Operation = "modify"
+			curArgs, _ := cur.Attributes["arguments"].(map[string]string)
+			rc.CurrentArgs = curArgs
+
+			diff := diffArguments(cur, prop)
+			if diff != nil {
+				rc.ChangedArgs = diff.Changed
+				rc.AddedArgs = diff.Added
+				rc.RemovedArgs = diff.Removed
+			}
+
+			// Dependents: who references this resource in the current graph
+			for _, depID := range dependentOf[cur.ID] {
+				if r, ok := currentByID[depID]; ok {
+					rc.Dependents = append(rc.Dependents, r.Identifier)
+				}
+			}
+		} else {
+			rc.Operation = "create"
+		}
+
+		// DependsOn: what this proposed resource references
+		seenRef := map[string]bool{}
+		for _, expr := range propArgs {
+			for _, ref := range extractResourceRefs(expr) {
+				if !seenRef[ref] {
+					seenRef[ref] = true
+					rc.DependsOn = append(rc.DependsOn, ref)
+				}
+			}
+		}
+		sort.Strings(rc.DependsOn)
+		sort.Strings(rc.Dependents)
+
+		contexts = append(contexts, rc)
+	}
+
+	// Destroyed resources: exist in current graph but absent from proposed
+	for _, cur := range current.Resources {
+		if proposedIdents[cur.Identifier] {
+			continue
+		}
+		curArgs, _ := cur.Attributes["arguments"].(map[string]string)
+
+		rc := graph.ResourceContext{
+			Identifier:  cur.Identifier,
+			Type:        cur.Type,
+			Operation:   "destroy",
+			CurrentArgs: curArgs,
+		}
+		if curArgs["deletion_protection"] == "true" {
+			rc.LifecycleFlags.DeletionProtection = true
+		}
+		for _, depID := range dependentOf[cur.ID] {
+			if r, ok := currentByID[depID]; ok {
+				rc.Dependents = append(rc.Dependents, r.Identifier)
+			}
+		}
+		sort.Strings(rc.Dependents)
+		contexts = append(contexts, rc)
+	}
+
+	sort.Slice(contexts, func(i, j int) bool {
+		return contexts[i].Identifier < contexts[j].Identifier
+	})
+
+	return &graph.ReversibilityContext{Resources: contexts}
+}
+
+// resourceNameFromIdent extracts the resource name from "type.name" identifier.
+func resourceNameFromIdent(ident string) string {
+	if i := strings.Index(ident, "."); i >= 0 {
+		return ident[i+1:]
+	}
+	return ident
+}
+
+// parseHCLBody parses a .tf file and returns the root body, or nil on error.
+func parseHCLBody(path string) *hclsyntax.Body {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	f, diags := hclsyntax.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
+	if diags.HasErrors() {
+		return nil
+	}
+	body, ok := f.Body.(*hclsyntax.Body)
+	if !ok {
+		return nil
+	}
+	return body
+}
+
+// extractLifecycleFlags reads the lifecycle block for a specific resource block.
+func extractLifecycleFlags(body *hclsyntax.Body, resourceType, resourceName string) graph.LifecycleFlags {
+	if body == nil {
+		return graph.LifecycleFlags{}
+	}
+	for _, block := range body.Blocks {
+		if block.Type != "resource" || len(block.Labels) < 2 {
+			continue
+		}
+		if block.Labels[0] != resourceType || block.Labels[1] != resourceName {
+			continue
+		}
+		for _, lb := range block.Body.Blocks {
+			if lb.Type != "lifecycle" {
+				continue
+			}
+			var flags graph.LifecycleFlags
+			if attr, ok := lb.Body.Attributes["prevent_destroy"]; ok {
+				val, diags := attr.Expr.Value(nil)
+				if !diags.HasErrors() && val.Type() == cty.Bool {
+					flags.PreventDestroy = val.True()
+				}
+			}
+			if attr, ok := lb.Body.Attributes["create_before_destroy"]; ok {
+				val, diags := attr.Expr.Value(nil)
+				if !diags.HasErrors() && val.Type() == cty.Bool {
+					flags.CreateBeforeDestroy = val.True()
+				}
+			}
+			return flags
+		}
+	}
+	return graph.LifecycleFlags{}
 }
 
 // extractResourceRefs pulls "type.name" references out of an HCL expression string.

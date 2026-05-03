@@ -7,8 +7,9 @@ type ImpactResult struct {
 	Created        []ResourceDiff               `json:"created,omitempty"`
 	Modified       []ResourceDiff               `json:"modified,omitempty"`
 	BlastRadius    []BlastItem                  `json:"blast_radius,omitempty"`
-	Warnings       []string                     `json:"warnings,omitempty"`
-	SimilarExamples map[string][]SimilarExample `json:"similar_examples,omitempty"`
+	Warnings             []string                     `json:"warnings,omitempty"`
+	SimilarExamples      map[string][]SimilarExample  `json:"similar_examples,omitempty"`
+	ReversibilityContext *ReversibilityContext         `json:"reversibility_context,omitempty"`
 }
 
 // SimilarExample is a concise view of an existing resource used as a reference.
@@ -39,4 +40,34 @@ type BlastItem struct {
 	Identifier   string `json:"identifier"`
 	Type         string `json:"type"`
 	Relationship string `json:"relationship"`
+}
+
+// ReversibilityContext holds per-resource context the agent uses to reason about
+// whether each proposed change can be rolled back.
+type ReversibilityContext struct {
+	Resources []ResourceContext `json:"resources"`
+}
+
+// ResourceContext surfaces the raw facts about a single resource change so the
+// agent can assess rollback risk without any hardcoded classification.
+type ResourceContext struct {
+	Identifier     string             `json:"identifier"`
+	Type           string             `json:"type"`
+	Operation      string             `json:"operation"`              // create | modify | destroy
+	CurrentArgs    map[string]string  `json:"current_args,omitempty"` // state before change
+	ProposedArgs   map[string]string  `json:"proposed_args,omitempty"`
+	ChangedArgs    map[string]ArgDiff `json:"changed_args,omitempty"`
+	AddedArgs      map[string]string  `json:"added_args,omitempty"`
+	RemovedArgs    []string           `json:"removed_args,omitempty"`
+	LifecycleFlags LifecycleFlags     `json:"lifecycle_flags"`
+	Dependents     []string           `json:"dependents,omitempty"` // identifiers that reference this resource
+	DependsOn      []string           `json:"depends_on,omitempty"` // identifiers this resource references
+}
+
+// LifecycleFlags captures Terraform lifecycle settings and resource-level
+// protection flags that affect how safely a change can be applied or reversed.
+type LifecycleFlags struct {
+	PreventDestroy      bool `json:"prevent_destroy"`
+	CreateBeforeDestroy bool `json:"create_before_destroy"`
+	DeletionProtection  bool `json:"deletion_protection"` // from resource args, e.g. RDS
 }
