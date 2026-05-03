@@ -135,5 +135,34 @@ func New(store *graph.Store) *server.MCPServer {
 		},
 	)
 
+	s.AddTool(
+		mcp.NewTool(
+			"find_similar",
+			mcp.WithDescription("Find similar Terraform resources or modules that can be used as implementation examples."),
+			mcp.WithString("description", mcp.Required(), mcp.Description("Natural-language description, such as read replica, postgres database, or security group.")),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			description, err := request.RequireString("description")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			resources, err := store.FindSimilar(ctx, description, 10)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if len(resources) == 0 {
+				return mcp.NewToolResultText(fmt.Sprintf("No similar resources found for %q.", description)), nil
+			}
+
+			payload, err := json.MarshalIndent(resources, "", "  ")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			return mcp.NewToolResultText(string(payload)), nil
+		},
+	)
+
 	return s
 }

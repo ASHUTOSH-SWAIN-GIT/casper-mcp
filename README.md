@@ -36,6 +36,7 @@ go run ./cmd/casper-mcp serve --config .casper/config.yaml
 - `get_dependencies(resource_id)`: returns direct dependencies and dependents for a resource ID from `find_resource`.
 - `get_module_for(intent)`: searches Terraform modules by path, variables, outputs, and managed resources.
 - `get_conventions(resource_type)`: returns convention summaries derived from Terraform modules for a resource type.
+- `find_similar(description)`: returns similar Terraform resources and modules as examples for a described change.
 
 ## Current Scope
 
