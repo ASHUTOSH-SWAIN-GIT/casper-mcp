@@ -34,10 +34,12 @@ go run ./cmd/casper-mcp serve --config .casper/config.yaml
 
 - `find_resource(query)`: searches resources by identifier, type, attributes, or tags.
 - `get_dependencies(resource_id)`: returns direct dependencies and dependents for a resource ID from `find_resource`.
+- `get_module_for(intent)`: searches Terraform modules by path, variables, outputs, and managed resources.
 
 ## Current Scope
 
 - Local raw Terraform state files
+- Terraform module scanning from `.tf` code
 - Postgres-backed resource graph
 - MCP stdio server
 

@@ -165,6 +165,49 @@ func (s *Store) FindResources(ctx context.Context, query string, limit int) ([]R
 	return resources, nil
 }
 
+func (s *Store) FindModules(ctx context.Context, intent string, limit int) ([]Resource, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, source, type, identifier, attributes, tags, COALESCE(module_path, ''), managed_by, last_seen
+		FROM resources
+		WHERE type = 'terraform_module'
+			AND managed_by = 'terraform_code'
+			AND (
+				identifier ILIKE '%' || $1 || '%'
+				OR attributes::text ILIKE '%' || $1 || '%'
+			)
+		ORDER BY
+			CASE
+				WHEN identifier = $1 THEN 0
+				WHEN identifier ILIKE '%' || $1 || '%' THEN 1
+				WHEN attributes ->> 'path' ILIKE '%' || $1 || '%' THEN 2
+				ELSE 3
+			END,
+			identifier
+		LIMIT $2
+	`, intent, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query modules: %w", err)
+	}
+	defer rows.Close()
+
+	var modules []Resource
+	for rows.Next() {
+		resource, err := scanResource(rows)
+		if err != nil {
+			return nil, err
+		}
+		modules = append(modules, resource)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate modules: %w", err)
+	}
+	return modules, nil
+}
+
 func (s *Store) GetDependencies(ctx context.Context, resourceID string) ([]DependencyResult, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
@@ -250,6 +293,35 @@ func (s *Store) GetDependencies(ctx context.Context, resourceID string) ([]Depen
 		return nil, fmt.Errorf("iterate dependencies: %w", err)
 	}
 	return results, nil
+}
+
+type resourceScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanResource(scanner resourceScanner) (Resource, error) {
+	var resource Resource
+	var attrs, tags []byte
+	if err := scanner.Scan(
+		&resource.ID,
+		&resource.Source,
+		&resource.Type,
+		&resource.Identifier,
+		&attrs,
+		&tags,
+		&resource.ModulePath,
+		&resource.ManagedBy,
+		&resource.LastSeen,
+	); err != nil {
+		return Resource{}, fmt.Errorf("scan resource: %w", err)
+	}
+	if err := json.Unmarshal(attrs, &resource.Attributes); err != nil {
+		return Resource{}, fmt.Errorf("unmarshal attributes for %s: %w", resource.ID, err)
+	}
+	if err := json.Unmarshal(tags, &resource.Tags); err != nil {
+		return Resource{}, fmt.Errorf("unmarshal tags for %s: %w", resource.ID, err)
+	}
+	return resource, nil
 }
 
 func nullableString(value string) any {

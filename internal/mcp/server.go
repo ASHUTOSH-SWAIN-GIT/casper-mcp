@@ -77,5 +77,34 @@ func New(store *graph.Store) *server.MCPServer {
 		},
 	)
 
+	s.AddTool(
+		mcp.NewTool(
+			"get_module_for",
+			mcp.WithDescription("Find Terraform modules that match an infrastructure intent."),
+			mcp.WithString("intent", mcp.Required(), mcp.Description("Infrastructure intent, such as postgres database, rds, or read replica.")),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			intent, err := request.RequireString("intent")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			modules, err := store.FindModules(ctx, intent, 10)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if len(modules) == 0 {
+				return mcp.NewToolResultText(fmt.Sprintf("No Terraform modules found for %q.", intent)), nil
+			}
+
+			payload, err := json.MarshalIndent(modules, "", "  ")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			return mcp.NewToolResultText(string(payload)), nil
+		},
+	)
+
 	return s
 }
