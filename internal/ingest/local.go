@@ -64,7 +64,7 @@ func Run(ctx context.Context, cfg config.Config, store *graph.Store) (Summary, e
 		return Summary{}, err
 	}
 	for _, moduleDir := range moduleDirs {
-		resources, err := terraformcode.ParseDir(moduleDir)
+		resources, deps, err := terraformcode.ParseDirResources(moduleDir)
 		if err != nil {
 			return Summary{}, err
 		}
@@ -73,6 +73,12 @@ func Run(ctx context.Context, cfg config.Config, store *graph.Store) (Summary, e
 		}
 		if err := store.UpsertResources(ctx, resources); err != nil {
 			return Summary{}, err
+		}
+		if len(deps) > 0 {
+			if err := store.ReplaceDependencies(ctx, moduleDir, deps); err != nil {
+				return Summary{}, err
+			}
+			summary.Dependencies += len(deps)
 		}
 
 		summary.CodeModules++
