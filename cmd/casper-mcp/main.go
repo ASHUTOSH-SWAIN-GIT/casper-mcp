@@ -109,7 +109,8 @@ func runIngest(ctx context.Context, args []string) error {
 
 func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	dir := fs.String("dir", ".", "directory to scan for Terraform files")
+	dir     := fs.String("dir", ".", "directory to scan for Terraform files")
+	htmlOut := fs.String("html", "", "path to write live-updated HTML graph; empty = no HTML output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -124,12 +125,62 @@ func runServe(ctx context.Context, args []string) error {
 		return fmt.Errorf("scan %s: %w", absDir, err)
 	}
 
-	memStore := graph.NewMemStore(snapshot)
+	liveStore := graph.NewLiveStore(snapshot)
+
 	simulate := func(code string) (*graph.ImpactResult, error) {
-		return ingest.SimulateImpact(snapshot, memStore, code)
+		return ingest.SimulateImpact(liveStore.Snapshot(), liveStore, code)
 	}
 
-	return server.ServeStdio(mcpserver.New(memStore, simulate))
+	go func() {
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			log.Printf("casper: watcher init failed: %v", err)
+			return
+		}
+		defer watcher.Close()
+
+		if err := watchDirRecursive(watcher, absDir); err != nil {
+			log.Printf("casper: watch dir failed: %v", err)
+			return
+		}
+
+		var debounce <-chan time.Time
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if isTerraformFile(event.Name) {
+					debounce = time.After(800 * time.Millisecond)
+				}
+			case <-debounce:
+				debounce = nil
+				fresh, err := ingest.Scan(absDir)
+				if err != nil {
+					log.Printf("casper: rescan failed: %v", err)
+					continue
+				}
+				liveStore.Reload(fresh)
+				log.Printf("casper: reloaded %d resources", len(fresh.Resources))
+				if *htmlOut != "" {
+					if err := ui.Export(fresh, *htmlOut); err != nil {
+						log.Printf("casper: html export failed: %v", err)
+					}
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Printf("casper: watcher error: %v", err)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	log.Printf("casper: serving %s (watching for changes)", absDir)
+	return server.ServeStdio(mcpserver.New(liveStore, simulate))
 }
 
 func runUI(ctx context.Context, args []string) error {
