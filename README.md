@@ -38,6 +38,8 @@ go run ./cmd/casper-mcp serve --config .casper/config.yaml
 - `get_conventions(resource_type)`: returns convention summaries derived from Terraform modules for a resource type.
 - `find_similar(description)`: returns similar Terraform resources and modules as examples for a described change.
 
+Convention summaries now include argument-level data such as `common_arguments`, `argument_examples`, `literal_arguments`, and `reference_arguments`.
+
 ## Current Scope
 
 - Local raw Terraform state files
