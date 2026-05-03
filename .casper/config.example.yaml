@@ -1,0 +1,14 @@
+database:
+  url: postgres://casper:casper@localhost:5432/casper?sslmode=disable
+
+states:
+  - type: local
+    paths:
+      - fixtures/terraform.tfstate
+
+iac:
+  paths:
+    - "modules/**/*.tf"
+    - "envs/**/*.tf"
+  module_dirs:
+    - modules/

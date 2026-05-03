@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS dependencies;
+DROP TABLE IF EXISTS resources;
