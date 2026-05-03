@@ -8,7 +8,9 @@ states:
 
 iac:
   paths:
-    - "modules/**/*.tf"
-    - "envs/**/*.tf"
+    - /Users/lowkeydev/code/infrastructure/**/*.tf
+    - /Users/lowkeydev/code/terraform-aws-vpc/**/*.tf
   module_dirs:
-    - modules/
+    - /Users/lowkeydev/code/infrastructure/modules
+    - /Users/lowkeydev/code/infrastructure/services
+    - /Users/lowkeydev/code/terraform-aws-vpc/modules

@@ -4,9 +4,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/config"
@@ -38,6 +43,8 @@ func run(ctx context.Context, args []string) error {
 		return runServe(ctx, args[2:])
 	case "ui":
 		return runUI(ctx, args[2:])
+	case "watch":
+		return runWatch(ctx, args[2:])
 	default:
 		return usage()
 	}
@@ -142,6 +149,103 @@ func runUI(ctx context.Context, args []string) error {
 	return http.ListenAndServe(*addr, uiServer.Handler())
 }
 
+func runWatch(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	configPath := fs.String("config", ".casper/config.yaml", "path to Casper config")
+	addr := fs.String("addr", ":8080", "http listen address")
+	dir := fs.String("dir", ".", "directory to watch for Terraform file changes")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+
+	pool, err := graph.Connect(ctx, cfg.Database.URL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	store := graph.NewStore(pool)
+
+	runIngestNow := func() {
+		summary, err := ingest.Run(ctx, cfg, store)
+		if err != nil {
+			log.Printf("ingest error: %v", err)
+			return
+		}
+		log.Printf("ingested %d state files, %d code modules, %d resources, %d dependencies",
+			summary.StateFiles, summary.CodeModules, summary.Resources, summary.Dependencies)
+	}
+
+	runIngestNow()
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("create watcher: %w", err)
+	}
+	defer watcher.Close()
+
+	if err := watchDirRecursive(watcher, *dir); err != nil {
+		return fmt.Errorf("watch dir: %w", err)
+	}
+
+	go func() {
+		var debounce <-chan time.Time
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if isTerraformFile(event.Name) {
+					debounce = time.After(800 * time.Millisecond)
+				}
+			case <-debounce:
+				debounce = nil
+				runIngestNow()
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Printf("watcher error: %v", err)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	uiServer := ui.NewServer(store)
+	fmt.Printf("casper watching %s, ui at http://localhost%s\n", *dir, *addr)
+	return http.ListenAndServe(*addr, uiServer.Handler())
+}
+
+func watchDirRecursive(watcher *fsnotify.Watcher, root string) error {
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			name := info.Name()
+			if name == ".git" || name == ".terraform" || name == "node_modules" {
+				return filepath.SkipDir
+			}
+			return watcher.Add(path)
+		}
+		return nil
+	})
+}
+
+func isTerraformFile(name string) bool {
+	base := strings.ToLower(filepath.Base(name))
+	return strings.HasSuffix(base, ".tf") ||
+		strings.HasSuffix(base, ".tfstate") ||
+		strings.HasSuffix(base, ".tfstate.backup")
+}
+
 func usage() error {
-	return fmt.Errorf("usage: casper-mcp <migrate|ingest|serve|ui> --config .casper/config.yaml")
+	return fmt.Errorf("usage: casper-mcp <migrate|ingest|serve|ui|watch> --config .casper/config.yaml")
 }
