@@ -28,3 +28,8 @@ type DependencyResult struct {
 	Resource   Resource
 	Dependency Dependency
 }
+
+type GraphSnapshot struct {
+	Resources    []Resource
+	Dependencies []Dependency
+}

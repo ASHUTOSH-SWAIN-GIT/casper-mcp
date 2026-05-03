@@ -320,6 +320,64 @@ func (s *Store) FindSimilar(ctx context.Context, description string, limit int) 
 	return results, nil
 }
 
+func (s *Store) LoadGraphSnapshot(ctx context.Context) (GraphSnapshot, error) {
+	resourceRows, err := s.pool.Query(ctx, `
+		SELECT id, source, type, identifier, attributes, tags, COALESCE(module_path, ''), managed_by, last_seen
+		FROM resources
+		ORDER BY
+			CASE
+				WHEN type = 'terraform_module' THEN 0
+				WHEN type = 'terraform_convention' THEN 2
+				ELSE 1
+			END,
+			identifier
+	`)
+	if err != nil {
+		return GraphSnapshot{}, fmt.Errorf("query resources snapshot: %w", err)
+	}
+	defer resourceRows.Close()
+
+	var snapshot GraphSnapshot
+	for resourceRows.Next() {
+		resource, err := scanResource(resourceRows)
+		if err != nil {
+			return GraphSnapshot{}, err
+		}
+		snapshot.Resources = append(snapshot.Resources, resource)
+	}
+	if err := resourceRows.Err(); err != nil {
+		return GraphSnapshot{}, fmt.Errorf("iterate resources snapshot: %w", err)
+	}
+
+	dependencyRows, err := s.pool.Query(ctx, `
+		SELECT from_resource, to_resource, kind, source
+		FROM dependencies
+		ORDER BY from_resource, to_resource, kind
+	`)
+	if err != nil {
+		return GraphSnapshot{}, fmt.Errorf("query dependencies snapshot: %w", err)
+	}
+	defer dependencyRows.Close()
+
+	for dependencyRows.Next() {
+		var dependency Dependency
+		if err := dependencyRows.Scan(
+			&dependency.FromResource,
+			&dependency.ToResource,
+			&dependency.Kind,
+			&dependency.Source,
+		); err != nil {
+			return GraphSnapshot{}, fmt.Errorf("scan dependency snapshot: %w", err)
+		}
+		snapshot.Dependencies = append(snapshot.Dependencies, dependency)
+	}
+	if err := dependencyRows.Err(); err != nil {
+		return GraphSnapshot{}, fmt.Errorf("iterate dependencies snapshot: %w", err)
+	}
+
+	return snapshot, nil
+}
+
 func (s *Store) GetDependencies(ctx context.Context, resourceID string) ([]DependencyResult, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT

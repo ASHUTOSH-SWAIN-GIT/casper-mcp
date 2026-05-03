@@ -30,6 +30,12 @@ Start the MCP server over stdio:
 go run ./cmd/casper-mcp serve --config .casper/config.yaml
 ```
 
+Start the local graph UI:
+
+```sh
+go run ./cmd/casper-mcp ui --config .casper/config.yaml --addr :8080
+```
+
 ## Current Tools
 
 - `find_resource(query)`: searches resources by identifier, type, attributes, or tags.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -13,6 +14,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/mcp"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/migrations"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ui"
 )
 
 func main() {
@@ -34,6 +36,8 @@ func run(ctx context.Context, args []string) error {
 		return runIngest(ctx, args[2:])
 	case "serve":
 		return runServe(ctx, args[2:])
+	case "ui":
+		return runUI(ctx, args[2:])
 	default:
 		return usage()
 	}
@@ -114,6 +118,30 @@ func runServe(ctx context.Context, args []string) error {
 	return server.ServeStdio(mcpserver.New(graph.NewStore(pool)))
 }
 
+func runUI(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("ui", flag.ExitOnError)
+	configPath := fs.String("config", ".casper/config.yaml", "path to Casper config")
+	addr := fs.String("addr", ":8080", "http listen address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+
+	pool, err := graph.Connect(ctx, cfg.Database.URL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	uiServer := ui.NewServer(graph.NewStore(pool))
+	fmt.Printf("ui available at http://localhost%s\n", *addr)
+	return http.ListenAndServe(*addr, uiServer.Handler())
+}
+
 func usage() error {
-	return fmt.Errorf("usage: casper-mcp <migrate|ingest|serve> --config .casper/config.yaml")
+	return fmt.Errorf("usage: casper-mcp <migrate|ingest|serve|ui> --config .casper/config.yaml")
 }
