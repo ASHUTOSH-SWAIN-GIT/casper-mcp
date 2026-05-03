@@ -122,7 +122,7 @@ func (m *MemStore) FindConventions(_ context.Context, resourceType string, limit
 }
 
 func (m *MemStore) FindSimilar(_ context.Context, description string, limit int) ([]Resource, error) {
-	tokens := tokenizeQuery(description)
+	tokens := expandTokens(tokenizeQuery(description))
 	if len(tokens) == 0 {
 		return nil, nil
 	}
@@ -132,7 +132,7 @@ func (m *MemStore) FindSimilar(_ context.Context, description string, limit int)
 	}
 	var results []scored
 	for _, r := range m.resources {
-		s := similarityScore(r, description, tokens)
+		s := similarScore(r, tokens)
 		if s > 0 {
 			results = append(results, scored{r, s})
 		}
@@ -151,6 +151,112 @@ func (m *MemStore) FindSimilar(_ context.Context, description string, limit int)
 		out[i] = sr.r
 	}
 	return out, nil
+}
+
+// similarScore scores a resource against a set of tokens.
+// It checks type, identifier, and — most importantly — actual HCL argument
+// keys and values so agents get real working examples to copy from.
+func similarScore(r Resource, tokens []string) int {
+	ident := strings.ToLower(r.Identifier)
+	typ := strings.ToLower(r.Type)
+
+	// Build a flat text blob from the actual HCL arguments
+	argKeys, argVals := argumentTexts(r)
+
+	score := 0
+	for _, t := range tokens {
+		if strings.Contains(typ, t) {
+			score += 50
+		}
+		if strings.Contains(ident, t) {
+			score += 40
+		}
+		// Argument key match (e.g. token "replica" matches key "replicate_source_db")
+		for _, k := range argKeys {
+			if strings.Contains(k, t) {
+				score += 30
+				break
+			}
+		}
+		// Argument value match (e.g. token "postgres" matches value "postgres14")
+		for _, v := range argVals {
+			if strings.Contains(v, t) {
+				score += 20
+				break
+			}
+		}
+		if strings.Contains(strings.ToLower(r.ModulePath), t) {
+			score += 10
+		}
+	}
+	return score
+}
+
+func argumentTexts(r Resource) (keys, vals []string) {
+	args, ok := r.Attributes["arguments"].(map[string]string)
+	if !ok {
+		return
+	}
+	for k, v := range args {
+		keys = append(keys, strings.ToLower(k))
+		vals = append(vals, strings.ToLower(v))
+	}
+	return
+}
+
+// expandTokens adds Terraform-specific synonyms so natural language queries
+// match the actual argument names and resource types in HCL.
+func expandTokens(tokens []string) []string {
+	synonyms := map[string][]string{
+		"replica":      {"replicate_source_db", "replication_source_identifier", "replica"},
+		"rds":          {"aws_db_instance", "aws_rds_cluster", "db_instance"},
+		"database":     {"aws_db_instance", "aws_rds_cluster", "db_instance", "engine"},
+		"postgres":     {"postgres", "postgresql"},
+		"mysql":        {"mysql"},
+		"subnet":       {"aws_subnet", "subnet_id", "subnet_ids"},
+		"vpc":          {"aws_vpc", "vpc_id"},
+		"sg":           {"aws_security_group", "security_group_ids"},
+		"security":     {"aws_security_group", "security_group"},
+		"lb":           {"aws_lb", "aws_alb", "load_balancer"},
+		"loadbalancer": {"aws_lb", "aws_alb"},
+		"iam":          {"aws_iam_role", "aws_iam_policy", "iam_role"},
+		"role":         {"aws_iam_role", "iam_role_arn"},
+		"bucket":       {"aws_s3_bucket", "bucket"},
+		"s3":           {"aws_s3_bucket"},
+		"eks":          {"aws_eks_cluster", "aws_eks_node_group"},
+		"lambda":       {"aws_lambda_function"},
+		"ec2":          {"aws_instance", "instance_type"},
+		"instance":     {"aws_instance", "aws_db_instance", "instance_type", "instance_class"},
+		"cache":        {"aws_elasticache_cluster", "aws_elasticache_replication_group"},
+		"redis":        {"aws_elasticache_replication_group", "redis"},
+		"queue":        {"aws_sqs_queue"},
+		"sqs":          {"aws_sqs_queue"},
+		"sns":          {"aws_sns_topic"},
+		"route53":      {"aws_route53_record", "aws_route53_zone"},
+		"dns":          {"aws_route53_record", "aws_route53_zone"},
+		"cert":         {"aws_acm_certificate"},
+		"tls":          {"aws_acm_certificate"},
+		"kms":          {"aws_kms_key"},
+		"secret":       {"aws_secretsmanager_secret"},
+		"log":          {"aws_cloudwatch_log_group", "cloudwatch_logs"},
+		"cloudwatch":   {"aws_cloudwatch_metric_alarm", "aws_cloudwatch_log_group"},
+	}
+
+	seen := map[string]bool{}
+	expanded := make([]string, 0, len(tokens)*2)
+	for _, t := range tokens {
+		if !seen[t] {
+			seen[t] = true
+			expanded = append(expanded, t)
+		}
+		for _, syn := range synonyms[t] {
+			if !seen[syn] {
+				seen[syn] = true
+				expanded = append(expanded, syn)
+			}
+		}
+	}
+	return expanded
 }
 
 func findScore(r Resource, q string) int {

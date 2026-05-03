@@ -92,18 +92,24 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 		knownRef[r.Type+"."+r.Name] = resourceInstanceID(r.Type, r.Name, modulePath)
 	}
 
+	detailIndex := indexResourceDetails(details)
+
 	var resources []graph.Resource
 	for _, r := range module.ManagedResources {
+		attrs := map[string]any{
+			"resource_type": r.Type,
+			"resource_name": r.Name,
+			"module_path":   modulePath,
+		}
+		if detail, ok := detailIndex[resourceDetailKey(r.Type, r.Name)]; ok && len(detail.Arguments) > 0 {
+			attrs["arguments"] = detail.Arguments
+		}
 		resources = append(resources, graph.Resource{
 			ID:         resourceInstanceID(r.Type, r.Name, modulePath),
 			Source:     dir,
 			Type:       r.Type,
 			Identifier: r.Type + "." + r.Name,
-			Attributes: map[string]any{
-				"resource_type": r.Type,
-				"resource_name": r.Name,
-				"module_path":   modulePath,
-			},
+			Attributes: attrs,
 			Tags:       map[string]any{},
 			ModulePath: modulePath,
 			ManagedBy:  "terraform_code",
@@ -112,7 +118,6 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 
 	// Extract dependency edges: for each resource, scan its attribute values
 	// for references to other resources in this module.
-	detailIndex := indexResourceDetails(details)
 	var deps []graph.Dependency
 	for fromRef, fromID := range knownRef {
 		parts := strings.SplitN(fromRef, ".", 2)
