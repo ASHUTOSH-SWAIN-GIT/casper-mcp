@@ -33,6 +33,7 @@ go run ./cmd/casper-mcp serve --config .casper/config.yaml
 ## Current Tools
 
 - `find_resource(query)`: searches resources by identifier, type, attributes, or tags.
+- `get_dependencies(resource_id)`: returns direct dependencies and dependents for a resource ID from `find_resource`.
 
 ## Current Scope
 

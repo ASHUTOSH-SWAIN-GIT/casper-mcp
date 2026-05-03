@@ -110,10 +110,22 @@ func (s *Store) FindResources(ctx context.Context, query string, limit int) ([]R
 		FROM resources
 		WHERE identifier ILIKE '%' || $1 || '%'
 			OR type ILIKE '%' || $1 || '%'
+			OR attributes ->> 'id' ILIKE '%' || $1 || '%'
+			OR attributes ->> 'name' ILIKE '%' || $1 || '%'
+			OR attributes ->> 'identifier' ILIKE '%' || $1 || '%'
 			OR attributes::text ILIKE '%' || $1 || '%'
 			OR tags::text ILIKE '%' || $1 || '%'
 		ORDER BY
-			CASE WHEN identifier = $1 THEN 0 ELSE 1 END,
+			CASE
+				WHEN id = $1 THEN 0
+				WHEN identifier = $1 THEN 1
+				WHEN attributes ->> 'id' = $1 THEN 2
+				WHEN attributes ->> 'identifier' = $1 THEN 3
+				WHEN attributes ->> 'name' = $1 THEN 4
+				WHEN identifier ILIKE '%' || $1 || '%' THEN 5
+				WHEN type = $1 THEN 6
+				ELSE 7
+			END,
 			identifier
 		LIMIT $2
 	`, query, limit)
@@ -151,6 +163,93 @@ func (s *Store) FindResources(ctx context.Context, query string, limit int) ([]R
 		return nil, fmt.Errorf("iterate resources: %w", err)
 	}
 	return resources, nil
+}
+
+func (s *Store) GetDependencies(ctx context.Context, resourceID string) ([]DependencyResult, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			'dependency' AS direction,
+			d.kind,
+			d.source,
+			r.id,
+			r.source,
+			r.type,
+			r.identifier,
+			r.attributes,
+			r.tags,
+			COALESCE(r.module_path, ''),
+			r.managed_by,
+			r.last_seen,
+			d.from_resource,
+			d.to_resource
+		FROM dependencies d
+		JOIN resources r ON r.id = d.to_resource
+		WHERE d.from_resource = $1
+
+		UNION ALL
+
+		SELECT
+			'dependent' AS direction,
+			d.kind,
+			d.source,
+			r.id,
+			r.source,
+			r.type,
+			r.identifier,
+			r.attributes,
+			r.tags,
+			COALESCE(r.module_path, ''),
+			r.managed_by,
+			r.last_seen,
+			d.from_resource,
+			d.to_resource
+		FROM dependencies d
+		JOIN resources r ON r.id = d.from_resource
+		WHERE d.to_resource = $1
+
+		ORDER BY direction, identifier
+	`, resourceID)
+	if err != nil {
+		return nil, fmt.Errorf("query dependencies: %w", err)
+	}
+	defer rows.Close()
+
+	var results []DependencyResult
+	for rows.Next() {
+		var result DependencyResult
+		var attrs, tags []byte
+		if err := rows.Scan(
+			&result.Direction,
+			&result.Kind,
+			&result.Source,
+			&result.Resource.ID,
+			&result.Resource.Source,
+			&result.Resource.Type,
+			&result.Resource.Identifier,
+			&attrs,
+			&tags,
+			&result.Resource.ModulePath,
+			&result.Resource.ManagedBy,
+			&result.Resource.LastSeen,
+			&result.Dependency.FromResource,
+			&result.Dependency.ToResource,
+		); err != nil {
+			return nil, fmt.Errorf("scan dependency: %w", err)
+		}
+		result.Dependency.Kind = result.Kind
+		result.Dependency.Source = result.Source
+		if err := json.Unmarshal(attrs, &result.Resource.Attributes); err != nil {
+			return nil, fmt.Errorf("unmarshal attributes for %s: %w", result.Resource.ID, err)
+		}
+		if err := json.Unmarshal(tags, &result.Resource.Tags); err != nil {
+			return nil, fmt.Errorf("unmarshal tags for %s: %w", result.Resource.ID, err)
+		}
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dependencies: %w", err)
+	}
+	return results, nil
 }
 
 func nullableString(value string) any {

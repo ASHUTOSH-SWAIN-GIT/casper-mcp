@@ -48,5 +48,34 @@ func New(store *graph.Store) *server.MCPServer {
 		},
 	)
 
+	s.AddTool(
+		mcp.NewTool(
+			"get_dependencies",
+			mcp.WithDescription("Get resources that this resource depends on, plus resources that depend on it."),
+			mcp.WithString("resource_id", mcp.Required(), mcp.Description("Casper resource ID returned by find_resource.")),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			resourceID, err := request.RequireString("resource_id")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			dependencies, err := store.GetDependencies(ctx, resourceID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if len(dependencies) == 0 {
+				return mcp.NewToolResultText(fmt.Sprintf("No dependencies found for %q.", resourceID)), nil
+			}
+
+			payload, err := json.MarshalIndent(dependencies, "", "  ")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			return mcp.NewToolResultText(string(payload)), nil
+		},
+	)
+
 	return s
 }

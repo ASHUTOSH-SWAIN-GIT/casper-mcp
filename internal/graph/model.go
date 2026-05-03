@@ -20,3 +20,11 @@ type Dependency struct {
 	Kind         string
 	Source       string
 }
+
+type DependencyResult struct {
+	Direction  string
+	Kind       string
+	Source     string
+	Resource   Resource
+	Dependency Dependency
+}
