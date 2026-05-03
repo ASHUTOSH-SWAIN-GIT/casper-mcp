@@ -79,6 +79,28 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 
 ---
 
+## get_context
+
+**Purpose:** Get everything Casper knows about an infrastructure intent in a single call — existing resources, similar examples, matching modules, and conventions. Use this instead of calling `find_resource`, `find_similar`, `get_module_for`, and `get_conventions` separately.
+
+**Input:**
+| Param | Required | Description |
+|-------|----------|-------------|
+| `intent` | yes | What you are trying to build, e.g. `postgres read replica`, `S3 bucket with versioning`, `EKS node group` |
+
+**Returns:** A JSON object with up to 4 sections, each containing up to 5 resources. Resources are deduplicated across sections — if the same resource scores highly in multiple categories it only appears once.
+
+| Section | Source | Description |
+|---------|--------|-------------|
+| `existing_resources` | `find_resource` | Resources already deployed that match the intent |
+| `similar_examples` | `find_similar` | Resources to use as implementation templates (with HCL args) |
+| `modules` | `get_module_for` | Reusable modules that deliver the intent |
+| `conventions` | `get_conventions` | How this resource type is configured across the codebase |
+
+**When to use:** As the first call whenever you start working on an infrastructure task. One call replaces four.
+
+---
+
 ## simulate_impact
 
 **Purpose:** Parse proposed Terraform HCL and show what would change in the infrastructure graph — which resources get created or modified, what currently-deployed resources are in the blast radius, any broken references, and similar real examples from the repo.
@@ -115,5 +137,6 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 | `lifecycle_flags.deletion_protection` | Whether `deletion_protection = true` is set in the resource args |
 | `dependents` | Identifiers of existing resources that reference this one — affected by a rollback |
 | `depends_on` | Identifiers this proposed resource references — must exist for rollback to succeed |
+| `recent_commits` | Last 3 git commits that touched this resource block (hash, message, author, date). Uses git pickaxe to find exact changes to the block; falls back to recent `.tf` commits in the module dir. Only populated for modify and destroy operations. |
 
 **When to use:** After drafting Terraform, before asking the user to apply it — to validate correctness, understand side effects, and reason about whether each change can be safely rolled back.

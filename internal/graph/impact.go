@@ -60,8 +60,9 @@ type ResourceContext struct {
 	AddedArgs      map[string]string  `json:"added_args,omitempty"`
 	RemovedArgs    []string           `json:"removed_args,omitempty"`
 	LifecycleFlags LifecycleFlags     `json:"lifecycle_flags"`
-	Dependents     []string           `json:"dependents,omitempty"` // identifiers that reference this resource
-	DependsOn      []string           `json:"depends_on,omitempty"` // identifiers this resource references
+	Dependents     []string           `json:"dependents,omitempty"`      // identifiers that reference this resource
+	DependsOn      []string           `json:"depends_on,omitempty"`      // identifiers this resource references
+	RecentCommits  []GitCommit        `json:"recent_commits,omitempty"`  // last commits that touched this resource block
 }
 
 // LifecycleFlags captures Terraform lifecycle settings and resource-level
@@ -70,4 +71,12 @@ type LifecycleFlags struct {
 	PreventDestroy      bool `json:"prevent_destroy"`
 	CreateBeforeDestroy bool `json:"create_before_destroy"`
 	DeletionProtection  bool `json:"deletion_protection"` // from resource args, e.g. RDS
+}
+
+// GitCommit is a single entry from git log for a resource.
+type GitCommit struct {
+	Hash    string `json:"hash"`
+	Message string `json:"message"`
+	Author  string `json:"author"`
+	Date    string `json:"date"`
 }

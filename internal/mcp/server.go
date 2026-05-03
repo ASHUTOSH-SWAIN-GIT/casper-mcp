@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -162,6 +163,66 @@ func New(store graph.Querier, simulate SimulateFunc) *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
+			return mcp.NewToolResultText(string(payload)), nil
+		},
+	)
+
+	s.AddTool(
+		mcp.NewTool(
+			"get_context",
+			mcp.WithDescription("Get everything Casper knows that is relevant to an infrastructure intent — existing resources, similar examples, matching modules, and conventions — in a single call. Use this instead of calling find_resource, find_similar, get_module_for, and get_conventions separately."),
+			mcp.WithString("intent", mcp.Required(), mcp.Description("What you are trying to build or understand, e.g. 'postgres read replica', 'S3 bucket with versioning', 'EKS node group'.")),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			intent, err := request.RequireString("intent")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			type section struct {
+				name    string
+				results []graph.Resource
+				err     error
+			}
+			sections := make([]section, 4)
+			sections[0].name = "existing_resources"
+			sections[1].name = "similar_examples"
+			sections[2].name = "modules"
+			sections[3].name = "conventions"
+
+			var wg sync.WaitGroup
+			wg.Add(4)
+			go func() { defer wg.Done(); sections[0].results, sections[0].err = store.FindResources(ctx, intent, 5) }()
+			go func() { defer wg.Done(); sections[1].results, sections[1].err = store.FindSimilar(ctx, intent, 5) }()
+			go func() { defer wg.Done(); sections[2].results, sections[2].err = store.FindModules(ctx, intent, 5) }()
+			go func() { defer wg.Done(); sections[3].results, sections[3].err = store.FindConventions(ctx, intent, 5) }()
+			wg.Wait()
+
+			// Deduplicate across sections by ID — a resource that scores highly
+			// in multiple categories shouldn't be repeated.
+			seen := map[string]bool{}
+			out := map[string][]graph.Resource{}
+			for _, sec := range sections {
+				if sec.err != nil {
+					continue
+				}
+				for _, r := range sec.results {
+					if seen[r.ID] {
+						continue
+					}
+					seen[r.ID] = true
+					out[sec.name] = append(out[sec.name], r)
+				}
+			}
+
+			if len(seen) == 0 {
+				return mcp.NewToolResultText(fmt.Sprintf("No context found for %q.", intent)), nil
+			}
+
+			payload, err := json.MarshalIndent(out, "", "  ")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			return mcp.NewToolResultText(string(payload)), nil
 		},
 	)

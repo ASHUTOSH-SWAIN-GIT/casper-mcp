@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"os/exec"
+
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
@@ -242,6 +244,8 @@ func buildReversibilityContext(
 					rc.Dependents = append(rc.Dependents, r.Identifier)
 				}
 			}
+
+			rc.RecentCommits = gitHistoryForResource(cur.Source, prop.Type, resourceNameFromIdent(prop.Identifier))
 		} else {
 			rc.Operation = "create"
 		}
@@ -270,10 +274,11 @@ func buildReversibilityContext(
 		curArgs, _ := cur.Attributes["arguments"].(map[string]string)
 
 		rc := graph.ResourceContext{
-			Identifier:  cur.Identifier,
-			Type:        cur.Type,
-			Operation:   "destroy",
-			CurrentArgs: curArgs,
+			Identifier:    cur.Identifier,
+			Type:          cur.Type,
+			Operation:     "destroy",
+			CurrentArgs:   curArgs,
+			RecentCommits: gitHistoryForResource(cur.Source, cur.Type, resourceNameFromIdent(cur.Identifier)),
 		}
 		if curArgs["deletion_protection"] == "true" {
 			rc.LifecycleFlags.DeletionProtection = true
@@ -415,4 +420,52 @@ func diffArguments(cur, prop graph.Resource) *graph.ResourceDiff {
 		return nil // no change
 	}
 	return &graph.ResourceDiff{Added: added, Changed: changed, Removed: removed}
+}
+
+// gitHistoryForResource returns the last 3 commits that touched the specific
+// resource block using git pickaxe (-S). Falls back to recent dir-level commits
+// if the pickaxe search returns nothing (e.g. resource predates git history).
+func gitHistoryForResource(dir, resourceType, resourceName string) []graph.GitCommit {
+	if dir == "" {
+		return nil
+	}
+
+	format := "--format=%H|%s|%an|%ad"
+	search := fmt.Sprintf(`resource "%s" "%s"`, resourceType, resourceName)
+
+	run := func(extraArgs ...string) []graph.GitCommit {
+		args := append([]string{"-C", dir, "log", "--date=short", "-3", format}, extraArgs...)
+		out, err := exec.Command("git", args...).Output()
+		if err != nil || len(out) == 0 {
+			return nil
+		}
+		var commits []graph.GitCommit
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			parts := strings.SplitN(line, "|", 4)
+			if len(parts) != 4 {
+				continue
+			}
+			commits = append(commits, graph.GitCommit{
+				Hash:    parts[0][:min(7, len(parts[0]))],
+				Message: parts[1],
+				Author:  parts[2],
+				Date:    parts[3],
+			})
+		}
+		return commits
+	}
+
+	// Pickaxe: commits that added/removed this exact resource block
+	if commits := run("-S", search); len(commits) > 0 {
+		return commits
+	}
+	// Fallback: recent commits touching any .tf file in the dir
+	return run("--", "*.tf")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
