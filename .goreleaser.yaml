@@ -88,7 +88,7 @@ release:
 
     **Download binary:** grab the archive for your platform below, extract, and place `casper-mcp` on your `$PATH`.
 
-brews:
+homebrew_formulae:
   - name: casper-mcp
     repository:
       owner: ASHUTOSH-SWAIN-GIT
