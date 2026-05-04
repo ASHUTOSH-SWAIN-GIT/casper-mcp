@@ -113,6 +113,7 @@ func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dir     := fs.String("dir", ".", "directory to scan for Terraform files")
 	htmlOut := fs.String("html", "", "path to write live-updated HTML graph; empty = no HTML output")
+	httpAddr := fs.String("http", "", "enable HTTP transport and listen on this address, e.g. :8080 (omit to use stdio)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -198,8 +199,28 @@ func runServe(ctx context.Context, args []string) error {
 		}
 	}()
 
-	log.Printf("casper: serving %s (watching for changes)", absDir)
-	return server.ServeStdio(mcpserver.New(liveStore, simulate, awsClient))
+	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies)
+
+	if *httpAddr != "" {
+		httpSrv := server.NewStreamableHTTPServer(mcpSrv,
+			server.WithEndpointPath("/mcp"),
+			server.WithHeartbeatInterval(15*time.Second),
+		)
+		log.Printf("casper: serving %s over HTTP on %s/mcp (watching for changes)", absDir, *httpAddr)
+		// Shut down the HTTP server cleanly when ctx is cancelled.
+		go func() {
+			<-ctx.Done()
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := httpSrv.Shutdown(shutCtx); err != nil {
+				log.Printf("casper: HTTP shutdown error: %v", err)
+			}
+		}()
+		return httpSrv.Start(*httpAddr)
+	}
+
+	log.Printf("casper: serving %s over stdio (watching for changes)", absDir)
+	return server.ServeStdio(mcpSrv)
 }
 
 func runUI(ctx context.Context, args []string) error {
@@ -373,5 +394,17 @@ func openBrowser(path string) {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: casper-mcp <migrate|ingest|serve|ui|watch|export> [flags]")
+	return fmt.Errorf(`usage: casper-mcp <command> [flags]
+
+Commands:
+  serve   -dir <path> [-http <addr>] [-html <path>]
+            Scan a Terraform directory and start the MCP server.
+            Stdio mode (default): used by Claude Code, Cursor, Claude Desktop.
+            HTTP mode (-http :8080): exposes POST/GET/DELETE /mcp for custom clients.
+
+  ingest  -config <path>   Ingest Terraform into Postgres graph store.
+  migrate -config <path>   Run database migrations.
+  watch   -config <path> -dir <path> -addr <addr>  Watch + ingest + UI.
+  ui      -config <path> -addr <addr>  Start the graph UI.
+  export  -dir <path> -output <file>   Export graph to HTML.`)
 }

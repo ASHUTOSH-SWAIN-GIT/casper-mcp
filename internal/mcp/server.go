@@ -6,17 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/awslive"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
 )
 
 type SimulateFunc func(code string) (*graph.ImpactResult, error)
 
-func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client) *server.MCPServer {
+func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, policies []policy.Policy) *server.MCPServer {
 	s := server.NewMCPServer(
 		"casper",
 		"0.1.0",
@@ -396,6 +398,99 @@ Individual lookup tools (find_resource, find_similar, get_module_for, get_conven
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 
+				return mcp.NewToolResultText(string(payload)), nil
+			},
+		)
+	}
+
+	// dump_graph: only available when the store is a LiveStore (serve mode)
+	if snapshotter, ok := store.(graph.Snapshotter); ok {
+		s.AddTool(
+			mcp.NewTool(
+				"dump_graph",
+				mcp.WithDescription("Return the complete infrastructure graph: all resources, all dependency edges, resource counts by type, and policy violations on every resource. Use this to bootstrap a client-side graph view or for full-repo analysis. For targeted queries use find_resource or get_context instead."),
+				mcp.WithTitleAnnotation("Dump Graph"),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithDestructiveHintAnnotation(false),
+				mcp.WithIdempotentHintAnnotation(true),
+			),
+			func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				snap := snapshotter.Snapshot()
+
+				type ResourceEntry struct {
+					ID         string         `json:"id"`
+					Type       string         `json:"type"`
+					Identifier string         `json:"identifier"`
+					ModulePath string         `json:"module_path,omitempty"`
+					Source     string         `json:"source,omitempty"`
+					Attributes map[string]any `json:"attributes,omitempty"`
+					Tags       map[string]any `json:"tags,omitempty"`
+					Violations []policy.Violation `json:"policy_violations,omitempty"`
+				}
+				type DepEntry struct {
+					From string `json:"from"`
+					To   string `json:"to"`
+					Kind string `json:"kind"`
+				}
+				type TypeStat struct {
+					Type  string `json:"type"`
+					Count int    `json:"count"`
+				}
+
+				resources := make([]ResourceEntry, 0, len(snap.Resources))
+				typeCounts := make(map[string]int)
+				for _, r := range snap.Resources {
+					typeCounts[r.Type]++
+					tags := make(map[string]string)
+					for k, v := range r.Tags {
+						if s, ok := v.(string); ok {
+							tags[k] = s
+						}
+					}
+					var viols []policy.Violation
+					if len(policies) > 0 {
+						args := make(map[string]string)
+						for k, v := range r.Attributes {
+							if s, ok := v.(string); ok {
+								args[k] = s
+							}
+						}
+						viols = policy.Check(policies, r.Type, r.Identifier, args, tags)
+					}
+					resources = append(resources, ResourceEntry{
+						ID:         r.ID,
+						Type:       r.Type,
+						Identifier: r.Identifier,
+						ModulePath: r.ModulePath,
+						Source:     r.Source,
+						Attributes: r.Attributes,
+						Tags:       r.Tags,
+						Violations: viols,
+					})
+				}
+
+				deps := make([]DepEntry, 0, len(snap.Dependencies))
+				for _, d := range snap.Dependencies {
+					deps = append(deps, DepEntry{From: d.FromResource, To: d.ToResource, Kind: d.Kind})
+				}
+
+				typeStats := make([]TypeStat, 0, len(typeCounts))
+				for t, c := range typeCounts {
+					typeStats = append(typeStats, TypeStat{Type: t, Count: c})
+				}
+
+				out := map[string]any{
+					"fetched_at":      time.Now().UTC().Format(time.RFC3339),
+					"resource_count":  len(resources),
+					"dep_count":       len(deps),
+					"resources_by_type": typeStats,
+					"resources":       resources,
+					"dependencies":    deps,
+				}
+				payload, err := json.MarshalIndent(out, "", "  ")
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
 				return mcp.NewToolResultText(string(payload)), nil
 			},
 		)

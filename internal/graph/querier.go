@@ -11,3 +11,9 @@ type Querier interface {
 	FindConventions(ctx context.Context, resourceType string, limit int) ([]Resource, error)
 	FindSimilar(ctx context.Context, description string, limit int) ([]Resource, error)
 }
+
+// Snapshotter is optionally implemented by stores that hold an in-memory
+// snapshot (e.g. LiveStore). dump_graph uses this to return the full graph.
+type Snapshotter interface {
+	Snapshot() GraphSnapshot
+}
