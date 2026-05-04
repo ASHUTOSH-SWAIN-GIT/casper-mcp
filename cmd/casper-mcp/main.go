@@ -478,6 +478,19 @@ func runInit(args []string) error {
 	return nil
 }
 
+// resolveExecutable returns the absolute path to this binary so that MCP
+// clients (Claude Code, Cursor, etc.) can find it even when the directory
+// it lives in (e.g. /opt/homebrew/bin) is not on their PATH.
+func resolveExecutable() string {
+	if exe, err := os.Executable(); err == nil {
+		if abs, err := filepath.EvalSymlinks(exe); err == nil {
+			return abs
+		}
+		return exe
+	}
+	return "casper-mcp" // fallback
+}
+
 // writeMCPJSON writes the casper MCP server config to dest, preserving any
 // existing servers already defined in that file.
 func writeMCPJSON(dest string) error {
@@ -492,7 +505,7 @@ func writeMCPJSON(dest string) error {
 		servers = map[string]any{}
 	}
 	servers["casper"] = map[string]any{
-		"command": "casper-mcp",
+		"command": resolveExecutable(),
 		"args":    []string{"serve"},
 	}
 	existing["mcpServers"] = servers
@@ -522,7 +535,7 @@ func mergeGlobalMCPServer(settingsPath string) error {
 		servers = map[string]any{}
 	}
 	servers["casper"] = map[string]any{
-		"command": "casper-mcp",
+		"command": resolveExecutable(),
 		"args":    []string{"serve"},
 	}
 	existing["mcpServers"] = servers

@@ -57,6 +57,20 @@ function installSlashCommand() {
   }
 }
 
+// Resolve the absolute path to the casper-mcp executable so that GUI apps
+// (Electron, etc.) can find it even when /opt/homebrew/bin is not on their PATH.
+function resolveBinaryPath() {
+  // Prefer the downloaded Go binary bundled in this npm package.
+  if (fs.existsSync(BIN_PATH)) return BIN_PATH;
+  // Fall back to whatever is on PATH (e.g. installed via `go install`).
+  try {
+    const which = IS_WINDOWS ? "where" : "which";
+    return execFileSync(which, ["casper-mcp"], { encoding: "utf8" }).trim().split("\n")[0];
+  } catch (_) {
+    return "casper-mcp"; // last resort — bare name
+  }
+}
+
 function installClaudeConfig() {
   try {
     const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
@@ -65,7 +79,7 @@ function installClaudeConfig() {
       try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch (_) {}
     }
     settings.mcpServers = settings.mcpServers || {};
-    settings.mcpServers.casper = { command: "casper-mcp", args: ["serve", "--dir", "."] };
+    settings.mcpServers.casper = { command: resolveBinaryPath(), args: ["serve", "--dir", "."] };
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     console.log("casper-mcp: registered in ~/.claude/settings.json (Claude Code)");
@@ -75,7 +89,8 @@ function installClaudeConfig() {
 function installCodexConfig() {
   try {
     const configPath = path.join(os.homedir(), ".codex", "config.toml");
-    const entry = `\n[mcp_servers.casper]\ncommand = "casper-mcp"\nargs = ["serve", "--dir", "."]\n`;
+    const cmd = resolveBinaryPath().replace(/\\/g, "\\\\"); // escape backslashes for Windows paths
+    const entry = `\n[mcp_servers.casper]\ncommand = "${cmd}"\nargs = ["serve", "--dir", "."]\n`;
 
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
 
