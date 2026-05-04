@@ -6,6 +6,7 @@ import (
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/workflow"
 )
 
 // testSnapshot returns a small synthetic graph used across all simulate tests.
@@ -55,12 +56,13 @@ func testSnapshot() graph.GraphSnapshot {
 
 func noQuerier() graph.Querier { return graph.NewMemStore(graph.GraphSnapshot{}) }
 func noPolicies() []policy.Policy { return nil }
+func noWorkflowRules() []workflow.WorkflowRule { return nil }
 
 // --- Create ---
 
 func TestSimulateImpact_Create(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/orders"
   retention_in_days = 30
@@ -84,7 +86,7 @@ resource "aws_cloudwatch_log_group" "ecs" {
 
 func TestSimulateImpact_CreateReversibilityOperation(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_cloudwatch_log_group" "ecs" {
   name = "/ecs/orders"
 }`)
@@ -113,7 +115,7 @@ resource "aws_cloudwatch_log_group" "ecs" {
 func TestSimulateImpact_Modify(t *testing.T) {
 	snapshot := testSnapshot()
 	// Change instance_class on an existing resource
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_db_instance" "orders" {
   engine         = "postgres"
   instance_class = "db.t3.large"
@@ -145,7 +147,7 @@ resource "aws_db_instance" "orders" {
 
 func TestSimulateImpact_ModifyReversibilityContext(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_db_instance" "orders" {
   engine         = "postgres"
   instance_class = "db.t3.large"
@@ -178,7 +180,7 @@ resource "aws_db_instance" "orders" {
 func TestSimulateImpact_BlastRadius_Downstream(t *testing.T) {
 	snapshot := testSnapshot()
 	// Modifying vpc.main — sg.app depends on it so should be in blast radius
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_vpc" "main" {
   cidr_block = "10.1.0.0/16"
 }`)
@@ -199,7 +201,7 @@ resource "aws_vpc" "main" {
 func TestSimulateImpact_BlastRadius_NewResourceUpstream(t *testing.T) {
 	snapshot := testSnapshot()
 	// New SG that references the existing vpc — vpc should appear in blast radius
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_security_group" "new_sg" {
   vpc_id      = aws_vpc.main.id
   description = "new sg"
@@ -223,7 +225,7 @@ resource "aws_security_group" "new_sg" {
 func TestSimulateImpact_BrokenReference(t *testing.T) {
 	snapshot := testSnapshot()
 	// Reference to nonexistent resource
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_security_group" "orphan" {
   vpc_id      = aws_vpc.nonexistent.id
   description = "orphaned"
@@ -239,7 +241,7 @@ resource "aws_security_group" "orphan" {
 func TestSimulateImpact_NoWarnForValidRef(t *testing.T) {
 	snapshot := testSnapshot()
 	// Reference to existing resource — should not warn
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_security_group" "valid" {
   vpc_id      = aws_vpc.main.id
   description = "valid reference"
@@ -258,7 +260,7 @@ resource "aws_security_group" "valid" {
 
 func TestSimulateImpact_LifecycleFlags_PreventDestroy(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_db_instance" "orders" {
   engine         = "postgres"
   instance_class = "db.t3.medium"
@@ -285,7 +287,7 @@ resource "aws_db_instance" "orders" {
 
 func TestSimulateImpact_LifecycleFlags_CreateBeforeDestroy(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), `
+	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_db_instance" "orders" {
   engine         = "postgres"
   instance_class = "db.t3.medium"
@@ -319,7 +321,7 @@ func TestSimulateImpact_PolicyViolation(t *testing.T) {
 	}}
 
 	// Propose a new RDS without deletion_protection
-	result, err := SimulateImpact(snapshot, noQuerier(), policies, `
+	result, err := SimulateImpact(snapshot, noQuerier(), policies, noWorkflowRules(), `
 resource "aws_db_instance" "new_db" {
   engine         = "postgres"
   instance_class = "db.t3.small"
@@ -349,7 +351,7 @@ func TestSimulateImpact_PolicyPass(t *testing.T) {
 	}}
 
 	// Propose a new RDS with deletion_protection = true
-	result, err := SimulateImpact(snapshot, noQuerier(), policies, `
+	result, err := SimulateImpact(snapshot, noQuerier(), policies, noWorkflowRules(), `
 resource "aws_db_instance" "new_db" {
   engine              = "postgres"
   instance_class      = "db.t3.small"
@@ -365,7 +367,7 @@ resource "aws_db_instance" "new_db" {
 
 func TestSimulateImpact_NoPolicies(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), nil, `
+	result, err := SimulateImpact(snapshot, noQuerier(), nil, noWorkflowRules(), `
 resource "aws_db_instance" "new_db" {
   engine = "postgres"
 }`)
@@ -380,7 +382,7 @@ resource "aws_db_instance" "new_db" {
 // --- Error cases ---
 
 func TestSimulateImpact_NoResourceBlocks(t *testing.T) {
-	_, err := SimulateImpact(testSnapshot(), noQuerier(), noPolicies(), `
+	_, err := SimulateImpact(testSnapshot(), noQuerier(), noPolicies(), noWorkflowRules(), `
 variable "region" {
   default = "us-east-1"
 }`)
@@ -390,7 +392,7 @@ variable "region" {
 }
 
 func TestSimulateImpact_InvalidHCL(t *testing.T) {
-	_, err := SimulateImpact(testSnapshot(), noQuerier(), noPolicies(), `this is not valid hcl {{{`)
+	_, err := SimulateImpact(testSnapshot(), noQuerier(), noPolicies(), noWorkflowRules(), `this is not valid hcl {{{`)
 	if err == nil {
 		t.Error("expected error for invalid HCL")
 	}

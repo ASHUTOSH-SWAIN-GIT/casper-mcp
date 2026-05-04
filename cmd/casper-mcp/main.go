@@ -20,10 +20,11 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/config"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest"
-	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/mcp"
+	mcpserver "github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/mcp"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/migrations"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ui"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/workflow"
 )
 
 func main() {
@@ -136,8 +137,13 @@ func runServe(ctx context.Context, args []string) error {
 		log.Printf("casper: policy load warning: %v", err)
 	}
 
+	workflowRules, err := workflow.Load(absDir)
+	if err != nil {
+		log.Printf("casper: workflow rules load warning: %v", err)
+	}
+
 	simulate := func(code string) (*graph.ImpactResult, error) {
-		return ingest.SimulateImpact(liveStore.Snapshot(), liveStore, policies, code)
+		return ingest.SimulateImpact(liveStore.Snapshot(), liveStore, policies, workflowRules, code)
 	}
 
 	var awsClient *awslive.Client

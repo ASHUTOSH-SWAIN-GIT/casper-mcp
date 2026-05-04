@@ -17,13 +17,14 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest/terraformcode"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/workflow"
 )
 
 // SimulateImpact parses proposedCode as Terraform HCL, diffs it against the
 // current snapshot, and returns which resources would be created or modified,
 // what the downstream blast radius is, broken-reference warnings, and similar
 // examples from the repo for each proposed resource type.
-func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies []policy.Policy, proposedCode string) (*graph.ImpactResult, error) {
+func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies []policy.Policy, workflowRules []workflow.WorkflowRule, proposedCode string) (*graph.ImpactResult, error) {
 	// Write proposed code to a temp dir so the HCL parser can read it
 	tmpDir, err := os.MkdirTemp("", "casper-sim-*")
 	if err != nil {
@@ -202,6 +203,33 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 		}
 	}
 
+	// Workflow decision: advisory routing based on env, operation, and resource family
+	var wfDecision *graph.WorkflowDecision
+	if len(workflowRules) > 0 {
+		var inputs []workflow.ResourceInput
+		for _, prop := range proposed {
+			op := "create"
+			cur, exists := currentByIdent[prop.Identifier]
+			if exists {
+				op = "modify"
+			}
+			tags := flattenTags(prop.Tags)
+			modulePath := ""
+			if exists {
+				modulePath = cur.ModulePath
+			}
+			inputs = append(inputs, workflow.ResourceInput{
+				Identifier: prop.Identifier,
+				Type:       prop.Type,
+				Operation:  op,
+				Tags:       tags,
+				ModulePath: modulePath,
+				Source:     prop.Source,
+			})
+		}
+		wfDecision = workflow.Evaluate(workflowRules, inputs)
+	}
+
 	return &graph.ImpactResult{
 		Summary:              summary,
 		Created:              created,
@@ -211,6 +239,7 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 		SimilarExamples:      similarExamples,
 		ReversibilityContext: revCtx,
 		PolicyViolations:     policyViolations,
+		WorkflowDecision:     wfDecision,
 	}, nil
 }
 

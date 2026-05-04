@@ -1,0 +1,103 @@
+version: 2
+
+project_name: casper-mcp
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: casper-mcp
+    main: ./cmd/casper-mcp
+    binary: casper-mcp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - docs/TOOLS.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge remote-tracking branch
+  groups:
+    - title: Features
+      regexp: "^feat"
+      order: 0
+    - title: Bug Fixes
+      regexp: "^fix"
+      order: 1
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: ASHUTOSH-SWAIN-GIT
+    name: casper-mcp
+  name_template: "v{{.Version}}"
+  draft: false
+  prerelease: auto
+  header: |
+    ## Casper MCP v{{.Version}}
+
+    Casper is an MCP server that gives AI agents a live, queryable view of your Terraform infrastructure — find resources, simulate changes, detect AWS drift, and enforce policies.
+
+    ### Quick install
+
+    **Homebrew (macOS/Linux):**
+    ```bash
+    brew install ASHUTOSH-SWAIN-GIT/tap/casper-mcp
+    ```
+
+    **Go install:**
+    ```bash
+    go install github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/cmd/casper-mcp@latest
+    ```
+
+    **Download binary:** grab the archive for your platform below, extract, and place `casper-mcp` on your `$PATH`.
+
+brews:
+  - name: casper-mcp
+    repository:
+      owner: ASHUTOSH-SWAIN-GIT
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/ASHUTOSH-SWAIN-GIT/casper-mcp"
+    description: "MCP server for querying Terraform infrastructure graphs"
+    license: "MIT"
+    install: |
+      bin.install "casper-mcp"
+    test: |
+      system "#{bin}/casper-mcp", "--help"

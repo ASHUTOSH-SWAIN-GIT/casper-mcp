@@ -3,14 +3,30 @@ package graph
 // ImpactResult is the output of SimulateImpact — what would change in the
 // graph if the proposed Terraform were applied.
 type ImpactResult struct {
-	Summary        string                       `json:"summary"`
-	Created        []ResourceDiff               `json:"created,omitempty"`
-	Modified       []ResourceDiff               `json:"modified,omitempty"`
-	BlastRadius    []BlastItem                  `json:"blast_radius,omitempty"`
-	Warnings             []string                     `json:"warnings,omitempty"`
-	SimilarExamples      map[string][]SimilarExample  `json:"similar_examples,omitempty"`
-	ReversibilityContext *ReversibilityContext         `json:"reversibility_context,omitempty"`
-	PolicyViolations     []PolicyViolation            `json:"policy_violations,omitempty"`
+	Summary              string                      `json:"summary"`
+	Created              []ResourceDiff              `json:"created,omitempty"`
+	Modified             []ResourceDiff              `json:"modified,omitempty"`
+	BlastRadius          []BlastItem                 `json:"blast_radius,omitempty"`
+	Warnings             []string                    `json:"warnings,omitempty"`
+	SimilarExamples      map[string][]SimilarExample `json:"similar_examples,omitempty"`
+	ReversibilityContext *ReversibilityContext        `json:"reversibility_context,omitempty"`
+	PolicyViolations     []PolicyViolation           `json:"policy_violations,omitempty"`
+	WorkflowDecision     *WorkflowDecision           `json:"workflow_decision,omitempty"`
+}
+
+// WorkflowDecision is the advisory routing outcome across all resources in the change.
+type WorkflowDecision struct {
+	Decision      string        `json:"decision"`                  // allow | require_approval | require_security_review | block
+	MatchedRules  []MatchedRule `json:"matched_rules,omitempty"`
+	RequiredSteps []string      `json:"required_steps"`
+	Blocked       bool          `json:"blocked"`
+	BlockedReason string        `json:"blocked_reason,omitempty"`
+}
+
+// MatchedRule records one workflow rule that fired during evaluation.
+type MatchedRule struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
 }
 
 // PolicyViolation is a single policy rule that the proposed change violates.

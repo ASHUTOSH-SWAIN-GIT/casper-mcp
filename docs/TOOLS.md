@@ -153,6 +153,42 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 
 Policies are defined in `.casper/policies.yaml` in the scanned repo. Supported rule types: `must_equal`, `must_not_equal`, `required`, `min_value`. Applies to `resource` (specific type) or `"*"` (all types).
 
+**`workflow_decision` fields:**
+
+| Field | Description |
+|-------|-------------|
+| `decision` | Advisory routing outcome: `allow`, `require_approval`, `require_security_review`, or `block` |
+| `matched_rules[]` | Rules that fired — each has `id` and `reason` describing the matching facts |
+| `required_steps[]` | Ordered steps the team should complete before applying (e.g. `["get_team_lead_approval"]`) |
+| `blocked` | `true` when decision is `block` — the change should not proceed |
+| `blocked_reason` | Human-readable reason from the first blocking rule |
+
+`workflow_decision` is advisory — the agent should follow it but no hard enforcement happens. Rules are defined in the `workflow_rules:` key in `.casper/policies.yaml`. Each rule has a `when:` condition (all non-empty fields must match) and a `decision:`. First match per resource wins; strictest decision across all resources in the change wins overall.
+
+`when:` condition fields:
+
+| Field | Description |
+|-------|-------------|
+| `env` | Environment detected from tags, module path, or identifier (`prod`, `staging`, `dev`). Fails closed to `prod` if undetectable |
+| `operation` | `create`, `modify`, or `destroy` — string or list |
+| `resource_type_family` | Broad family: `database`, `iam`, `network_security`, `compute`, `storage` |
+| `resource_type` | Exact Terraform resource type, e.g. `aws_db_instance` |
+
+Example:
+```yaml
+workflow_rules:
+  - id: database-destroy-block
+    when:
+      resource_type_family: database
+      operation: destroy
+    decision: block
+  - id: prod-changes-require-approval
+    when:
+      env: prod
+      operation: [create, modify, destroy]
+    decision: require_approval
+```
+
 **When to use:** After drafting Terraform, before asking the user to apply it — to validate correctness, understand side effects, check org policy compliance, and reason about whether each change can be safely rolled back.
 
 ---
