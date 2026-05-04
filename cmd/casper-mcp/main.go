@@ -40,6 +40,8 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	switch args[1] {
+	case "init":
+		return runInit(args[2:])
 	case "migrate":
 		return runMigrate(args[2:])
 	case "ingest":
@@ -438,8 +440,57 @@ func openBrowser(path string) {
 	}
 }
 
+// casperCommand is the content written to .claude/commands/casper.md
+const casperCommand = `Use the casper MCP tools to build infrastructure context for this project.
+
+$ARGUMENTS
+
+Instructions:
+- If a specific intent or resource was provided in $ARGUMENTS, call get_context with that intent to find relevant resources, dependencies, and examples.
+- If no intent was provided, call dump_graph to get a full snapshot of the infrastructure graph, then summarise: total resources, resource types, and any policy violations.
+- After getting context, briefly describe what you found — resource names, types, dependencies, and anything notable (drift, policy violations, workflow decisions).
+- If the user wants to make a change, call simulate_impact with the proposed HCL before applying anything.
+`
+
+func runInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	global := fs.Bool("global", false, "write to ~/.claude/commands/ instead of .claude/commands/")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	var dir string
+	if *global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get home dir: %w", err)
+		}
+		dir = filepath.Join(home, ".claude", "commands")
+	} else {
+		dir = filepath.Join(".claude", "commands")
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create commands dir: %w", err)
+	}
+
+	dest := filepath.Join(dir, "casper.md")
+	if err := os.WriteFile(dest, []byte(casperCommand), 0o644); err != nil {
+		return fmt.Errorf("write command file: %w", err)
+	}
+
+	fmt.Printf("created %s\n", dest)
+	if *global {
+		fmt.Println("run /casper in any Claude Code session to query your infrastructure")
+	} else {
+		fmt.Println("run /casper in Claude Code inside this project to query your infrastructure")
+	}
+	return nil
+}
+
 func usage() error {
 	return fmt.Errorf("usage: casper-mcp <command> [flags]\n\nCommands:\n" +
+		"  init    [--global]         Create the /casper slash command for Claude Code.\n" +
 		"  serve   -dir <path> [-http <addr>] [-html <path>]\n" +
 		"            Scan a Terraform directory and start the MCP server.\n" +
 		"            Stdio mode (default): used by Claude Code, Cursor, Claude Desktop.\n" +

@@ -74,6 +74,7 @@ async function main() {
     }
 
     console.log(`casper-mcp: ready at ${BIN_PATH}`);
+    console.log(`casper-mcp: run "casper-mcp init --global" to add the /casper slash command to Claude Code`);
   } finally {
     if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
   }

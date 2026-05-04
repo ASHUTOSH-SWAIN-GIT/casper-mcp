@@ -37,6 +37,16 @@ go install github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/cmd/casper-mcp@latest
 ## Quick start
 
 ```bash
+# Install and set up the /casper slash command for Claude Code
+npm install -g casper-mcp
+casper-mcp init --global
+```
+
+Then add the MCP server to your Claude Code config (see [Connect to Claude](#connect-to-claude)) and run `/casper` to query your infrastructure.
+
+## Commands
+
+```bash
 # Start the MCP server against your infra repo (stdio mode for Claude Desktop/Code)
 casper-mcp serve --dir /path/to/your/terraform
 
