@@ -27,6 +27,7 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 | Param | Required | Description |
 |-------|----------|-------------|
 | `resource_id` | yes | Casper resource ID returned by `find_resource` |
+| `limit` | no | Max results to return (default 50, max 500) |
 
 **Returns:** Dependency graph for the resource — both upstream (what it needs) and downstream (what needs it).
 
@@ -127,7 +128,7 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 
 | Field | Description |
 |-------|-------------|
-| `operation` | `create`, `modify`, or `destroy` |
+| `operation` | `create` or `modify` (proposed resources only — the tool analyzes partial changes, not full state replacement) |
 | `current_args` | Arguments as they exist in the graph right now |
 | `proposed_args` | Arguments as they would be after apply |
 | `changed_args` | Per-argument before/after diff (modify only) |
@@ -138,7 +139,7 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 | `lifecycle_flags.deletion_protection` | Whether `deletion_protection = true` is set in the resource args |
 | `dependents` | Identifiers of existing resources that reference this one — affected by a rollback |
 | `depends_on` | Identifiers this proposed resource references — must exist for rollback to succeed |
-| `recent_commits` | Last 3 git commits that touched this resource block (hash, message, author, date). Uses git pickaxe to find exact changes to the block; falls back to recent `.tf` commits in the module dir. Only populated for modify and destroy operations. |
+| `recent_commits` | Last 3 git commits that touched this resource block (hash, message, author, date). Uses git pickaxe to find exact changes to the block; falls back to recent `.tf` commits in the module dir. Only populated for modify operations. |
 
 **`policy_violations[]` fields:**
 
@@ -223,3 +224,71 @@ cloud:
 If the section is absent, the tool returns an error explaining how to configure it.
 
 **When to use:** Before modifying or destroying a resource, to confirm what's actually deployed versus what state files claim — especially after manual changes or partial applies.
+
+---
+
+## load_repo
+
+**Purpose:** Clone a GitHub repository and reload the infrastructure graph from it. After this call, all other tools operate on the newly loaded repo — the in-memory graph is replaced atomically.
+
+**Input:**
+
+| Param | Required | Description |
+|-------|----------|-------------|
+| `url` | yes | GitHub repository HTTPS URL, e.g. `https://github.com/org/infra-repo` |
+| `token` | no | GitHub personal access token for private repositories. Leave empty for public repos |
+
+**Returns:**
+
+| Field | Description |
+|-------|-------------|
+| `status` | `"loaded"` on success |
+| `url` | The URL that was cloned |
+| `resource_count` | Number of Terraform resources found in the repo |
+| `dep_count` | Number of dependency edges in the graph |
+
+**Notes:**
+- Clones with `--depth=1` (shallow) — fast for large repos
+- The cloned repo is placed in a stable temp dir keyed by URL hash, so re-loading the same URL is idempotent (removes and re-clones)
+- Only available in `serve` mode (not `ingest`/`watch`)
+
+**When to use:** To point the server at a different infrastructure repo without restarting. Typically called once at session start when the client provides a GitHub URL.
+
+---
+
+## dump_graph
+
+**Purpose:** Return the complete infrastructure graph in a single call — all resources, all dependency edges, resource counts by type, and policy violations evaluated per resource. Designed to bootstrap a client-side graph view.
+
+**Input:** None.
+
+**Returns:**
+
+| Field | Description |
+|-------|-------------|
+| `fetched_at` | ISO-8601 timestamp of when this snapshot was taken |
+| `resource_count` | Total number of resources in the graph |
+| `dep_count` | Total number of dependency edges |
+| `resources_by_type[]` | Array of `{ type, count }` — resource counts grouped by Terraform type |
+| `resources[]` | All resources (see below) |
+| `dependencies[]` | All edges as `{ from, to, kind }` |
+
+**`resources[]` fields:**
+
+| Field | Description |
+|-------|-------------|
+| `id` | Internal Casper resource ID |
+| `type` | Terraform resource type, e.g. `aws_db_instance` |
+| `identifier` | `type.name` identifier, e.g. `aws_db_instance.orders_main` |
+| `module_path` | Source path of the `.tf` file that defines this resource |
+| `source` | Directory the resource was scanned from |
+| `attributes` | Full attributes map (includes `arguments` sub-map with HCL arg values) |
+| `tags` | Tag key/value map |
+| `policy_violations[]` | Policy violations for this resource — same shape as `simulate_impact` violations |
+
+**Notes:**
+- Only available in `serve` mode (requires a `LiveStore` — not available in `ingest`/`watch`)
+- For repos with many resources this response can be large — use `find_resource` or `get_context` for targeted queries
+- Intended for client-side graph rendering and caching; cache invalidation should be driven by SSE events from the server
+
+**When to use:** To seed a client-side graph store on connect, or for full-repo analysis that needs every resource at once.

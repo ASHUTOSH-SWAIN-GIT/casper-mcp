@@ -184,7 +184,7 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 	)
 
 	// Reversibility context: per-resource facts for the agent to reason about rollback
-	revCtx := buildReversibilityContext(proposed, current, currentByIdent, currentByID, dependentOf, tmpDir)
+	revCtx := buildReversibilityContext(proposed, currentByIdent, currentByID, dependentOf, tmpDir)
 
 	// Policy violations: check created and modified resources against org policies
 	var policyViolations []graph.PolicyViolation
@@ -216,7 +216,6 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 
 func buildReversibilityContext(
 	proposed []graph.Resource,
-	current graph.GraphSnapshot,
 	currentByIdent map[string]graph.Resource,
 	currentByID map[string]graph.Resource,
 	dependentOf map[string][]string,
@@ -225,11 +224,9 @@ func buildReversibilityContext(
 	// Parse the raw HCL file for lifecycle block extraction
 	hclBody, hclSrc := parseHCLBody(filepath.Join(tmpDir, "proposed.tf"))
 
-	proposedIdents := map[string]bool{}
 	var contexts []graph.ResourceContext
 
 	for _, prop := range proposed {
-		proposedIdents[prop.Identifier] = true
 		propArgs, _ := prop.Attributes["arguments"].(map[string]string)
 
 		rc := graph.ResourceContext{
@@ -281,32 +278,6 @@ func buildReversibilityContext(
 		sort.Strings(rc.DependsOn)
 		sort.Strings(rc.Dependents)
 
-		contexts = append(contexts, rc)
-	}
-
-	// Destroyed resources: exist in current graph but absent from proposed
-	for _, cur := range current.Resources {
-		if proposedIdents[cur.Identifier] {
-			continue
-		}
-		curArgs, _ := cur.Attributes["arguments"].(map[string]string)
-
-		rc := graph.ResourceContext{
-			Identifier:    cur.Identifier,
-			Type:          cur.Type,
-			Operation:     "destroy",
-			CurrentArgs:   curArgs,
-			RecentCommits: gitHistoryForResource(cur.Source, cur.Type, resourceNameFromIdent(cur.Identifier)),
-		}
-		if curArgs["deletion_protection"] == "true" {
-			rc.LifecycleFlags.DeletionProtection = true
-		}
-		for _, depID := range dependentOf[cur.ID] {
-			if r, ok := currentByID[depID]; ok {
-				rc.Dependents = append(rc.Dependents, r.Identifier)
-			}
-		}
-		sort.Strings(rc.Dependents)
 		contexts = append(contexts, rc)
 	}
 

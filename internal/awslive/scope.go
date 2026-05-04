@@ -75,6 +75,12 @@ func ResolveScope(
 	}
 
 	if len(result) > maxScopeResources {
+		if len(resourceIDs) > 0 {
+			return nil, fmt.Errorf(
+				"%d resource_ids resolved to %d resources (max %d) — reduce the list",
+				len(resourceIDs), len(result), maxScopeResources,
+			)
+		}
 		return nil, fmt.Errorf(
 			"intent %q resolved to %d resources (max %d) — use resource_ids to narrow scope",
 			intent, len(result), maxScopeResources,
