@@ -76,9 +76,9 @@ release:
 
     ### Quick install
 
-    **Homebrew (macOS/Linux):**
+    **npm / npx:**
     ```bash
-    brew install ASHUTOSH-SWAIN-GIT/tap/casper-mcp
+    npx casper-mcp serve --dir /path/to/your/terraform
     ```
 
     **Go install:**
@@ -87,17 +87,3 @@ release:
     ```
 
     **Download binary:** grab the archive for your platform below, extract, and place `casper-mcp` on your `$PATH`.
-
-homebrew_formulae:
-  - name: casper-mcp
-    repository:
-      owner: ASHUTOSH-SWAIN-GIT
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: "https://github.com/ASHUTOSH-SWAIN-GIT/casper-mcp"
-    description: "MCP server for querying Terraform infrastructure graphs"
-    license: "MIT"
-    install: |
-      bin.install "casper-mcp"
-    test: |
-      system "#{bin}/casper-mcp", "--help"
