@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"context"
 	"testing"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
@@ -537,21 +536,3 @@ func contains(s, substr string) bool {
 		}())
 }
 
-// noopQuerier satisfies graph.Querier with empty results
-type noopQuerier struct{}
-
-func (n *noopQuerier) FindResources(_ context.Context, _ string, _ int) ([]graph.Resource, error) {
-	return nil, nil
-}
-func (n *noopQuerier) GetDependencies(_ context.Context, _ string) ([]graph.DependencyResult, error) {
-	return nil, nil
-}
-func (n *noopQuerier) FindModules(_ context.Context, _ string, _ int) ([]graph.Resource, error) {
-	return nil, nil
-}
-func (n *noopQuerier) FindConventions(_ context.Context, _ string, _ int) ([]graph.Resource, error) {
-	return nil, nil
-}
-func (n *noopQuerier) FindSimilar(_ context.Context, _ string, _ int) ([]graph.Resource, error) {
-	return nil, nil
-}

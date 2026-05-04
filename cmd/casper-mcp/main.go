@@ -439,17 +439,14 @@ func openBrowser(path string) {
 }
 
 func usage() error {
-	return fmt.Errorf(`usage: casper-mcp <command> [flags]
-
-Commands:
-  serve   -dir <path> [-http <addr>] [-html <path>]
-            Scan a Terraform directory and start the MCP server.
-            Stdio mode (default): used by Claude Code, Cursor, Claude Desktop.
-            HTTP mode (-http :8080): exposes POST/GET/DELETE /mcp for custom clients.
-
-  ingest  -config <path>   Ingest Terraform into Postgres graph store.
-  migrate -config <path>   Run database migrations.
-  watch   -config <path> -dir <path> -addr <addr>  Watch + ingest + UI.
-  ui      -config <path> -addr <addr>  Start the graph UI.
-  export  -dir <path> -output <file>   Export graph to HTML.`)
+	return fmt.Errorf("usage: casper-mcp <command> [flags]\n\nCommands:\n" +
+		"  serve   -dir <path> [-http <addr>] [-html <path>]\n" +
+		"            Scan a Terraform directory and start the MCP server.\n" +
+		"            Stdio mode (default): used by Claude Code, Cursor, Claude Desktop.\n" +
+		"            HTTP mode (-http :8080): exposes POST/GET/DELETE /mcp for custom clients.\n\n" +
+		"  ingest  -config <path>   Ingest Terraform into Postgres graph store.\n" +
+		"  migrate -config <path>   Run database migrations.\n" +
+		"  watch   -config <path> -dir <path> -addr <addr>  Watch + ingest + UI.\n" +
+		"  ui      -config <path> -addr <addr>  Start the graph UI.\n" +
+		"  export  -dir <path> -output <file>   Export graph to HTML")
 }

@@ -319,8 +319,8 @@ func buildReversibilityContext(
 
 // resourceNameFromIdent extracts the resource name from "type.name" identifier.
 func resourceNameFromIdent(ident string) string {
-	if i := strings.Index(ident, "."); i >= 0 {
-		return ident[i+1:]
+	if _, after, ok := strings.Cut(ident, "."); ok {
+		return after
 	}
 	return ident
 }
@@ -428,7 +428,7 @@ func isIdentifier(s string) bool {
 		return false
 	}
 	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' && c != '-' {
 			return false
 		}
 	}
@@ -501,13 +501,6 @@ func gitHistoryForResource(dir, resourceType, resourceName string) []graph.GitCo
 	}
 	// Fallback: recent commits touching any .tf file in the dir
 	return run("--", "*.tf")
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // flattenTags converts Resource.Tags (map[string]any) to map[string]string for

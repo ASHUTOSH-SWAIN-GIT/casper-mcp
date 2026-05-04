@@ -1,0 +1,17 @@
+version: "2"
+
+run:
+  go: "1.24"
+  timeout: 3m
+
+linters:
+  default: standard
+  disable:
+    - errcheck  # defer Close/Rollback/RemoveAll patterns are idiomatic; not worth fixing
+
+issues:
+  exclude-rules:
+    # usage() returns a multi-line help string; trailing newline is intentional
+    - linters: [staticcheck]
+      text: "ST1005"
+      source: "func usage"

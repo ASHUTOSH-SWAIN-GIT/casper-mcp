@@ -89,12 +89,6 @@ func Evaluate(rules []WorkflowRule, resources []ResourceInput) *graph.WorkflowDe
 		return nil
 	}
 
-	type resourceResult struct {
-		rule     WorkflowRule
-		reason   string
-		decision int // 0=allow 1=require_approval 2=require_security_review 3=block
-	}
-
 	decisionRank := map[string]int{
 		"allow":                   0,
 		"require_approval":        1,
