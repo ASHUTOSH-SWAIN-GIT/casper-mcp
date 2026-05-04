@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -454,43 +455,116 @@ Instructions:
 
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	global := fs.Bool("global", false, "write to ~/.claude/commands/ instead of .claude/commands/")
+	global := fs.Bool("global", false, "write to ~/.claude/ instead of .claude/ (works for any project)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	var dir string
-	if *global {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("get home dir: %w", err)
-		}
-		dir = filepath.Join(home, ".claude", "commands")
-	} else {
-		dir = filepath.Join(".claude", "commands")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home dir: %w", err)
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	var commandsDir string
+	if *global {
+		commandsDir = filepath.Join(home, ".claude", "commands")
+	} else {
+		commandsDir = filepath.Join(".claude", "commands")
+	}
+
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
 		return fmt.Errorf("create commands dir: %w", err)
 	}
 
-	dest := filepath.Join(dir, "casper.md")
-	if err := os.WriteFile(dest, []byte(casperCommand), 0o644); err != nil {
+	commandDest := filepath.Join(commandsDir, "casper.md")
+	if err := os.WriteFile(commandDest, []byte(casperCommand), 0o644); err != nil {
 		return fmt.Errorf("write command file: %w", err)
 	}
+	fmt.Printf("created %s\n", commandDest)
 
-	fmt.Printf("created %s\n", dest)
 	if *global {
-		fmt.Println("run /casper in any Claude Code session to query your infrastructure")
+		// For global init, merge the casper server entry into ~/.claude/settings.json.
+		if err := mergeGlobalMCPServer(filepath.Join(home, ".claude", "settings.json")); err != nil {
+			return fmt.Errorf("update global settings: %w", err)
+		}
+		fmt.Println("run /casper in any Claude Code session to query that project's infrastructure")
 	} else {
+		// For project init, write .mcp.json so Claude Code auto-spawns the server.
+		if err := writeMCPJSON(".mcp.json"); err != nil {
+			return fmt.Errorf("write .mcp.json: %w", err)
+		}
 		fmt.Println("run /casper in Claude Code inside this project to query your infrastructure")
 	}
 	return nil
 }
 
+// writeMCPJSON writes the casper MCP server config to dest, preserving any
+// existing servers already defined in that file.
+func writeMCPJSON(dest string) error {
+	existing := map[string]any{}
+	if data, err := os.ReadFile(dest); err == nil {
+		// Best-effort parse — ignore errors so a corrupted file is overwritten cleanly.
+		_ = json.Unmarshal(data, &existing)
+	}
+
+	servers, _ := existing["mcpServers"].(map[string]any)
+	if servers == nil {
+		servers = map[string]any{}
+	}
+	servers["casper"] = map[string]any{
+		"command": "casper-mcp",
+		"args":    []string{"serve"},
+	}
+	existing["mcpServers"] = servers
+
+	data, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("created %s\n", dest)
+	return nil
+}
+
+// mergeGlobalMCPServer adds the casper entry to the mcpServers block in the
+// Claude Code user settings file (~/.claude/settings.json).
+func mergeGlobalMCPServer(settingsPath string) error {
+	existing := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		_ = json.Unmarshal(data, &existing)
+	}
+
+	servers, _ := existing["mcpServers"].(map[string]any)
+	if servers == nil {
+		servers = map[string]any{}
+	}
+	servers["casper"] = map[string]any{
+		"command": "casper-mcp",
+		"args":    []string{"serve"},
+	}
+	existing["mcpServers"] = servers
+
+	data, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(settingsPath, data, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("updated %s\n", settingsPath)
+	return nil
+}
+
 func usage() error {
 	return fmt.Errorf("usage: casper-mcp <command> [flags]\n\nCommands:\n" +
-		"  init    [--global]         Create the /casper slash command for Claude Code.\n" +
+		"  init    [--global]         Create /casper slash command + wire up MCP server.\n" +
+		"                             Default: writes .mcp.json + .claude/commands/casper.md in the current project.\n" +
+		"                             --global: writes to ~/.claude/settings.json + ~/.claude/commands/casper.md\n" +
+		"                                       so Casper is available in every Claude Code project automatically.\n" +
 		"  serve   -dir <path> [-http <addr>] [-html <path>]\n" +
 		"            Scan a Terraform directory and start the MCP server.\n" +
 		"            Stdio mode (default): used by Claude Code, Cursor, Claude Desktop.\n" +
