@@ -127,6 +127,20 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.warn(`casper-mcp: install warning: ${err.message}`);
-  process.exit(0);
+  const { version } = require("./package.json");
+  process.stderr.write(
+    `\ncasper-mcp: binary download failed — ${err.message}\n` +
+    `\n` +
+    `  Option 1 — retry the install:\n` +
+    `    npm install -g casper-mcp\n` +
+    `\n` +
+    `  Option 2 — install via Go:\n` +
+    `    go install github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/cmd/casper-mcp@v${version}\n` +
+    `\n` +
+    `  Option 3 — download manually:\n` +
+    `    https://github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/releases/tag/v${version}\n` +
+    `\n` +
+    `  After installing, restart Claude Code (or your MCP client).\n\n`
+  );
+  process.exit(0); // non-fatal: don't fail npm install pipelines
 });
