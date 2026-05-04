@@ -140,8 +140,8 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 			for _, ref := range extractResourceRefs(expr) {
 				if _, ok := currentByIdent[ref]; !ok {
 					warnings = append(warnings, fmt.Sprintf(
-						"%s.%s: argument %q references %q which is not in the current graph",
-						argKey, prop.Identifier, argKey, ref,
+						"%s: argument %q references %q which is not in the current graph",
+						prop.Identifier, argKey, ref,
 					))
 				}
 			}
@@ -190,7 +190,8 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 	var policyViolations []graph.PolicyViolation
 	for _, prop := range proposed {
 		args, _ := prop.Attributes["arguments"].(map[string]string)
-		for _, v := range policy.Check(policies, prop.Type, prop.Identifier, args) {
+		tags := flattenTags(prop.Tags)
+		for _, v := range policy.Check(policies, prop.Type, prop.Identifier, args, tags) {
 			policyViolations = append(policyViolations, graph.PolicyViolation{
 				PolicyID: v.PolicyID,
 				Resource: v.Resource,
@@ -222,7 +223,7 @@ func buildReversibilityContext(
 	tmpDir string,
 ) *graph.ReversibilityContext {
 	// Parse the raw HCL file for lifecycle block extraction
-	hclBody := parseHCLBody(filepath.Join(tmpDir, "proposed.tf"))
+	hclBody, hclSrc := parseHCLBody(filepath.Join(tmpDir, "proposed.tf"))
 
 	proposedIdents := map[string]bool{}
 	var contexts []graph.ResourceContext
@@ -235,7 +236,7 @@ func buildReversibilityContext(
 			Identifier:     prop.Identifier,
 			Type:           prop.Type,
 			ProposedArgs:   propArgs,
-			LifecycleFlags: extractLifecycleFlags(hclBody, prop.Type, resourceNameFromIdent(prop.Identifier)),
+			LifecycleFlags: extractLifecycleFlags(hclBody, hclSrc, prop.Type, resourceNameFromIdent(prop.Identifier)),
 		}
 
 		// deletion_protection from proposed args
@@ -324,25 +325,27 @@ func resourceNameFromIdent(ident string) string {
 	return ident
 }
 
-// parseHCLBody parses a .tf file and returns the root body, or nil on error.
-func parseHCLBody(path string) *hclsyntax.Body {
+// parseHCLBody parses a .tf file and returns the root body and raw source bytes.
+// Both are nil/empty on error.
+func parseHCLBody(path string) (*hclsyntax.Body, []byte) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	f, diags := hclsyntax.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
-		return nil
+		return nil, nil
 	}
 	body, ok := f.Body.(*hclsyntax.Body)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	return body
+	return body, src
 }
 
 // extractLifecycleFlags reads the lifecycle block for a specific resource block.
-func extractLifecycleFlags(body *hclsyntax.Body, resourceType, resourceName string) graph.LifecycleFlags {
+// src is the raw HCL source bytes, used to extract ignore_changes values.
+func extractLifecycleFlags(body *hclsyntax.Body, src []byte, resourceType, resourceName string) graph.LifecycleFlags {
 	if body == nil {
 		return graph.LifecycleFlags{}
 	}
@@ -368,6 +371,26 @@ func extractLifecycleFlags(body *hclsyntax.Body, resourceType, resourceName stri
 				val, diags := attr.Expr.Value(nil)
 				if !diags.HasErrors() && val.Type() == cty.Bool {
 					flags.CreateBeforeDestroy = val.True()
+				}
+			}
+			if attr, ok := lb.Body.Attributes["ignore_changes"]; ok {
+				if len(src) > 0 {
+					r := attr.Expr.Range()
+					if r.Start.Byte >= 0 && r.End.Byte <= len(src) {
+						raw := strings.TrimSpace(string(src[r.Start.Byte:r.End.Byte]))
+						// raw looks like: [engine, instance_class] or ["engine"]
+						raw = strings.Trim(raw, "[]")
+						for _, part := range strings.Split(raw, ",") {
+							part = strings.TrimSpace(part)
+							part = strings.Trim(part, `"`)
+							if part != "" && part != "all" {
+								flags.IgnoreChanges = append(flags.IgnoreChanges, part)
+							} else if part == "all" {
+								flags.IgnoreChanges = []string{"all"}
+								break
+							}
+						}
+					}
 				}
 			}
 			return flags
@@ -485,4 +508,22 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// flattenTags converts Resource.Tags (map[string]any) to map[string]string for
+// policy evaluation. Non-string tag values are converted with fmt.Sprintf.
+func flattenTags(tags map[string]any) map[string]string {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(tags))
+	for k, v := range tags {
+		switch s := v.(type) {
+		case string:
+			out[k] = s
+		default:
+			out[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	return out
 }

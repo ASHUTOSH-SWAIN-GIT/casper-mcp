@@ -56,11 +56,16 @@ func New(store graph.Querier, simulate SimulateFunc) *server.MCPServer {
 			"get_dependencies",
 			mcp.WithDescription("Get resources that this resource depends on, plus resources that depend on it."),
 			mcp.WithString("resource_id", mcp.Required(), mcp.Description("Casper resource ID returned by find_resource.")),
+			mcp.WithNumber("limit", mcp.Description("Maximum number of dependency results to return. Defaults to 50.")),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			resourceID, err := request.RequireString("resource_id")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
+			}
+			limit := 50
+			if l, ok := request.GetArguments()["limit"].(float64); ok && l > 0 {
+				limit = int(l)
 			}
 
 			dependencies, err := store.GetDependencies(ctx, resourceID)
@@ -71,7 +76,17 @@ func New(store graph.Querier, simulate SimulateFunc) *server.MCPServer {
 				return mcp.NewToolResultText(fmt.Sprintf("No dependencies found for %q.", resourceID)), nil
 			}
 
-			payload, err := json.MarshalIndent(dependencies, "", "  ")
+			truncated := false
+			if len(dependencies) > limit {
+				dependencies = dependencies[:limit]
+				truncated = true
+			}
+
+			type depResponse struct {
+				Dependencies []graph.DependencyResult `json:"dependencies"`
+				Truncated    bool                     `json:"truncated,omitempty"`
+			}
+			payload, err := json.MarshalIndent(depResponse{Dependencies: dependencies, Truncated: truncated}, "", "  ")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -201,21 +216,30 @@ func New(store graph.Querier, simulate SimulateFunc) *server.MCPServer {
 			// Deduplicate across sections by ID — a resource that scores highly
 			// in multiple categories shouldn't be repeated.
 			seen := map[string]bool{}
-			out := map[string][]graph.Resource{}
+			out := map[string]any{}
+			var queryErrors []string
 			for _, sec := range sections {
 				if sec.err != nil {
+					queryErrors = append(queryErrors, fmt.Sprintf("%s: %v", sec.name, sec.err))
 					continue
 				}
+				var deduped []graph.Resource
 				for _, r := range sec.results {
 					if seen[r.ID] {
 						continue
 					}
 					seen[r.ID] = true
-					out[sec.name] = append(out[sec.name], r)
+					deduped = append(deduped, r)
+				}
+				if len(deduped) > 0 {
+					out[sec.name] = deduped
 				}
 			}
+			if len(queryErrors) > 0 {
+				out["errors"] = queryErrors
+			}
 
-			if len(seen) == 0 {
+			if len(seen) == 0 && len(queryErrors) == 0 {
 				return mcp.NewToolResultText(fmt.Sprintf("No context found for %q.", intent)), nil
 			}
 

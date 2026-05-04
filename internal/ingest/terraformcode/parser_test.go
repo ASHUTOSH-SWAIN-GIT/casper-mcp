@@ -36,7 +36,7 @@ func TestParseDir(t *testing.T) {
 	if argumentExamples["identifier"] != "var.name" {
 		t.Fatalf("expected identifier example var.name, got %v", argumentExamples["identifier"])
 	}
-	if argumentExamples["engine"] != "\"postgres\"" {
+	if argumentExamples["engine"] != "postgres" {
 		t.Fatalf("expected engine example \"postgres\", got %v", argumentExamples["engine"])
 	}
 
@@ -72,7 +72,7 @@ func TestParseDir(t *testing.T) {
 	if !ok {
 		t.Fatalf("literal_arguments has unexpected type %T", convention.Attributes["literal_arguments"])
 	}
-	if len(literalArguments["engine"]) != 1 || literalArguments["engine"][0] != "\"postgres\"" {
+	if len(literalArguments["engine"]) != 1 || literalArguments["engine"][0] != "postgres" {
 		t.Fatalf("expected engine literal argument \"postgres\", got %v", literalArguments["engine"])
 	}
 }

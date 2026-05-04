@@ -361,7 +361,14 @@ func parseResourceBlockDetails(dir string) ([]resourceBlockDetail, error) {
 				if exprRange.Start.Byte < 0 || exprRange.End.Byte > len(src) || exprRange.Start.Byte >= exprRange.End.Byte {
 					continue
 				}
-				arguments[name] = strings.TrimSpace(string(src[exprRange.Start.Byte:exprRange.End.Byte]))
+				val := strings.TrimSpace(string(src[exprRange.Start.Byte:exprRange.End.Byte]))
+				// Strip surrounding double quotes from simple string literals.
+				// Raw HCL source includes the quotes; booleans, numbers, and
+				// references (var.x, aws_vpc.main.id) never start with a quote.
+				if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+					val = val[1 : len(val)-1]
+				}
+				arguments[name] = val
 			}
 
 			details = append(details, resourceBlockDetail{
@@ -514,6 +521,7 @@ func isLiteralExpression(expr string) bool {
 	if expr == "" {
 		return false
 	}
+	// Still-quoted string (shouldn't happen after stripping, but be safe)
 	if strings.HasPrefix(expr, "\"") && strings.HasSuffix(expr, "\"") {
 		return true
 	}
@@ -521,12 +529,19 @@ func isLiteralExpression(expr string) bool {
 	case "true", "false", "null":
 		return true
 	}
+	// Pure number
+	allNumeric := true
 	for _, r := range expr {
 		if !unicode.IsDigit(r) && r != '.' && r != '-' {
-			return false
+			allNumeric = false
+			break
 		}
 	}
-	return true
+	if allNumeric {
+		return true
+	}
+	// Bare word string (quotes were stripped at parse time): literal if not a reference
+	return !isReferenceExpression(expr)
 }
 
 func isReferenceExpression(expr string) bool {

@@ -30,7 +30,7 @@ func TestCheck_MustEqual(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := Check(policies, "aws_db_instance", "aws_db_instance.orders", tt.args)
+			v := Check(policies, "aws_db_instance", "aws_db_instance.orders", tt.args, nil)
 			if (len(v) > 0) != tt.wantViolate {
 				t.Errorf("wantViolate=%v got %d violations", tt.wantViolate, len(v))
 			}
@@ -58,7 +58,7 @@ func TestCheck_MustNotEqual(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := Check(policies, "aws_s3_bucket", "aws_s3_bucket.data", tt.args)
+			v := Check(policies, "aws_s3_bucket", "aws_s3_bucket.data", tt.args, nil)
 			if (len(v) > 0) != tt.wantViolate {
 				t.Errorf("wantViolate=%v got %d violations", tt.wantViolate, len(v))
 			}
@@ -86,7 +86,7 @@ func TestCheck_Required(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := Check(policies, "aws_security_group", "aws_security_group.app", tt.args)
+			v := Check(policies, "aws_security_group", "aws_security_group.app", tt.args, nil)
 			if (len(v) > 0) != tt.wantViolate {
 				t.Errorf("wantViolate=%v got %d violations", tt.wantViolate, len(v))
 			}
@@ -117,7 +117,7 @@ func TestCheck_MinValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := Check(policies, "aws_db_instance", "aws_db_instance.orders", tt.args)
+			v := Check(policies, "aws_db_instance", "aws_db_instance.orders", tt.args, nil)
 			if (len(v) > 0) != tt.wantViolate {
 				t.Errorf("wantViolate=%v got %d violations", tt.wantViolate, len(v))
 			}
@@ -135,7 +135,7 @@ func TestCheck_WildcardResource(t *testing.T) {
 
 	// Should apply to any resource type
 	for _, rtype := range []string{"aws_db_instance", "aws_s3_bucket", "aws_lambda_function"} {
-		v := Check(policies, rtype, rtype+".test", map[string]string{})
+		v := Check(policies, rtype, rtype+".test", map[string]string{}, nil)
 		if len(v) == 0 {
 			t.Errorf("expected violation for resource type %s", rtype)
 		}
@@ -151,7 +151,7 @@ func TestCheck_ResourceTypeMismatch(t *testing.T) {
 	}}
 
 	// Should NOT apply to a different resource type
-	v := Check(policies, "aws_s3_bucket", "aws_s3_bucket.data", map[string]string{})
+	v := Check(policies, "aws_s3_bucket", "aws_s3_bucket.data", map[string]string{}, nil)
 	if len(v) > 0 {
 		t.Errorf("policy should not apply to aws_s3_bucket, got %d violations", len(v))
 	}
@@ -170,7 +170,7 @@ func TestCheck_MultipleRules_AllMustPass(t *testing.T) {
 	}}
 
 	// All three fail
-	v := Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{})
+	v := Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{}, nil)
 	if len(v) != 3 {
 		t.Errorf("expected 3 violations, got %d", len(v))
 	}
@@ -178,17 +178,17 @@ func TestCheck_MultipleRules_AllMustPass(t *testing.T) {
 	// Two fail
 	v = Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{
 		"deletion_protection": "true",
-	})
+	}, nil)
 	if len(v) != 2 {
 		t.Errorf("expected 2 violations, got %d", len(v))
 	}
 
 	// All pass
 	v = Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{
-		"deletion_protection":    "true",
+		"deletion_protection":     "true",
 		"backup_retention_period": "7",
-		"storage_encrypted":      "true",
-	})
+		"storage_encrypted":       "true",
+	}, nil)
 	if len(v) != 0 {
 		t.Errorf("expected 0 violations, got %d", len(v))
 	}
@@ -202,7 +202,7 @@ func TestCheck_ViolationFields(t *testing.T) {
 		Message:  "must protect",
 	}}
 
-	v := Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{})
+	v := Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{}, nil)
 	if len(v) != 1 {
 		t.Fatalf("expected 1 violation, got %d", len(v))
 	}

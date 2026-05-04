@@ -60,17 +60,17 @@ type Violation struct {
 	Details  string // specific rule failure
 }
 
-// Check evaluates all policies against a single resource's proposed arguments.
+// Check evaluates all policies against a single resource's proposed arguments and tags.
 // resourceType is e.g. "aws_db_instance", identifier is e.g. "aws_db_instance.orders".
-// proposedArgs is the flat map[string]string of HCL arguments.
-func Check(policies []Policy, resourceType, identifier string, proposedArgs map[string]string) []Violation {
+// proposedArgs is the flat map of HCL arguments; proposedTags is the resource tag map.
+func Check(policies []Policy, resourceType, identifier string, proposedArgs map[string]string, proposedTags map[string]string) []Violation {
 	var violations []Violation
 	for _, p := range policies {
 		if p.Resource != "*" && p.Resource != resourceType {
 			continue
 		}
 		for _, rule := range p.Rules {
-			if detail := evalRule(rule, proposedArgs); detail != "" {
+			if detail := evalRule(rule, proposedArgs, proposedTags); detail != "" {
 				violations = append(violations, Violation{
 					PolicyID: p.ID,
 					Resource: identifier,
@@ -84,7 +84,7 @@ func Check(policies []Policy, resourceType, identifier string, proposedArgs map[
 	return violations
 }
 
-func evalRule(r Rule, args map[string]string) string {
+func evalRule(r Rule, args map[string]string, tags map[string]string) string {
 	if r.Arg != "" {
 		val, exists := args[r.Arg]
 		if r.Required && (!exists || val == "") {
@@ -104,6 +104,21 @@ func evalRule(r Rule, args map[string]string) string {
 			if err != nil || n < *r.MinValue {
 				return fmt.Sprintf("argument %q must be >= %d (got %q)", r.Arg, *r.MinValue, val)
 			}
+		}
+	}
+	if r.Tag != "" {
+		val, exists := tags[r.Tag]
+		if r.Required && (!exists || val == "") {
+			return fmt.Sprintf("tag %q is required but not set", r.Tag)
+		}
+		if r.MustEqual != "" && val != r.MustEqual {
+			if !exists {
+				return fmt.Sprintf("tag %q must be %q (not set)", r.Tag, r.MustEqual)
+			}
+			return fmt.Sprintf("tag %q must be %q (got %q)", r.Tag, r.MustEqual, val)
+		}
+		if r.MustNotEqual != "" && val == r.MustNotEqual {
+			return fmt.Sprintf("tag %q must not be %q", r.Tag, r.MustNotEqual)
 		}
 	}
 	return ""

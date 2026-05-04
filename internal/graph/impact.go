@@ -78,9 +78,10 @@ type ResourceContext struct {
 // LifecycleFlags captures Terraform lifecycle settings and resource-level
 // protection flags that affect how safely a change can be applied or reversed.
 type LifecycleFlags struct {
-	PreventDestroy      bool `json:"prevent_destroy"`
-	CreateBeforeDestroy bool `json:"create_before_destroy"`
-	DeletionProtection  bool `json:"deletion_protection"` // from resource args, e.g. RDS
+	PreventDestroy      bool     `json:"prevent_destroy"`
+	CreateBeforeDestroy bool     `json:"create_before_destroy"`
+	DeletionProtection  bool     `json:"deletion_protection"` // from resource args, e.g. RDS
+	IgnoreChanges       []string `json:"ignore_changes,omitempty"`
 }
 
 // GitCommit is a single entry from git log for a resource.

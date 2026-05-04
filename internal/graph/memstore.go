@@ -106,19 +106,32 @@ func (m *MemStore) FindModules(_ context.Context, intent string, limit int) ([]R
 
 func (m *MemStore) FindConventions(_ context.Context, resourceType string, limit int) ([]Resource, error) {
 	q := strings.ToLower(strings.TrimSpace(resourceType))
-	var results []Resource
+	type scored struct {
+		r Resource
+		s int
+	}
+	var results []scored
 	for _, r := range m.resources {
 		if strings.ToLower(r.Type) == q || strings.Contains(strings.ToLower(r.Type), q) {
-			results = append(results, r)
+			// More arguments = more informative as a convention example
+			args, _ := r.Attributes["arguments"].(map[string]string)
+			results = append(results, scored{r, len(args)})
 		}
 	}
 	sort.SliceStable(results, func(i, j int) bool {
-		return results[i].Identifier < results[j].Identifier
+		if results[i].s != results[j].s {
+			return results[i].s > results[j].s
+		}
+		return results[i].r.Identifier < results[j].r.Identifier
 	})
 	if limit > 0 && len(results) > limit {
 		results = results[:limit]
 	}
-	return results, nil
+	out := make([]Resource, len(results))
+	for i, sr := range results {
+		out[i] = sr.r
+	}
+	return out, nil
 }
 
 func (m *MemStore) FindSimilar(_ context.Context, description string, limit int) ([]Resource, error) {
@@ -238,8 +251,24 @@ func expandTokens(tokens []string) []string {
 		"tls":          {"aws_acm_certificate"},
 		"kms":          {"aws_kms_key"},
 		"secret":       {"aws_secretsmanager_secret"},
-		"log":          {"aws_cloudwatch_log_group", "cloudwatch_logs"},
-		"cloudwatch":   {"aws_cloudwatch_metric_alarm", "aws_cloudwatch_log_group"},
+		"log":           {"aws_cloudwatch_log_group", "cloudwatch_logs"},
+		"cloudwatch":    {"aws_cloudwatch_metric_alarm", "aws_cloudwatch_log_group"},
+		"dynamodb":      {"aws_dynamodb_table"},
+		"table":         {"aws_dynamodb_table"},
+		"apigw":         {"aws_api_gateway_rest_api", "aws_apigatewayv2_api"},
+		"apigateway":    {"aws_api_gateway_rest_api", "aws_apigatewayv2_api"},
+		"api":           {"aws_api_gateway_rest_api", "aws_apigatewayv2_api"},
+		"eventbridge":   {"aws_cloudwatch_event_rule", "aws_cloudwatch_event_target"},
+		"events":        {"aws_cloudwatch_event_rule", "aws_cloudwatch_event_target"},
+		"kinesis":       {"aws_kinesis_stream", "aws_kinesis_firehose_delivery_stream"},
+		"stream":        {"aws_kinesis_stream", "aws_kinesis_firehose_delivery_stream"},
+		"redshift":      {"aws_redshift_cluster"},
+		"glue":          {"aws_glue_job", "aws_glue_crawler"},
+		"cognito":       {"aws_cognito_user_pool", "aws_cognito_identity_pool"},
+		"waf":           {"aws_wafv2_web_acl", "aws_waf_web_acl"},
+		"sfn":           {"aws_sfn_state_machine"},
+		"stepfunction":  {"aws_sfn_state_machine"},
+		"statemachine":  {"aws_sfn_state_machine"},
 	}
 
 	seen := map[string]bool{}
