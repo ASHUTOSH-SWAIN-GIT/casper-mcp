@@ -12,6 +12,16 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	States   []StateConfig  `yaml:"states"`
 	IAC      IACConfig      `yaml:"iac"`
+	Cloud    CloudConfig    `yaml:"cloud"`
+}
+
+type CloudConfig struct {
+	AWS AWSConfig `yaml:"aws"`
+}
+
+type AWSConfig struct {
+	RoleARN string   `yaml:"role_arn"`
+	Regions []string `yaml:"regions"`
 }
 
 type DatabaseConfig struct {

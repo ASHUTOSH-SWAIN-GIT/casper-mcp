@@ -15,6 +15,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/awslive"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/config"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest"
@@ -137,6 +138,18 @@ func runServe(ctx context.Context, args []string) error {
 		return ingest.SimulateImpact(liveStore.Snapshot(), liveStore, policies, code)
 	}
 
+	var awsClient *awslive.Client
+	if awsCfg, ok, err := awslive.LoadConfig(absDir); err != nil {
+		log.Printf("casper: cloud config warning: %v", err)
+	} else if ok {
+		if c, err := awslive.NewClient(ctx, awsCfg); err != nil {
+			log.Printf("casper: AWS client init failed: %v", err)
+		} else {
+			awsClient = c
+			log.Printf("casper: AWS client ready (role=%s, regions=%v)", awsCfg.RoleARN, awsCfg.Regions)
+		}
+	}
+
 	go func() {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
@@ -186,7 +199,7 @@ func runServe(ctx context.Context, args []string) error {
 	}()
 
 	log.Printf("casper: serving %s (watching for changes)", absDir)
-	return server.ServeStdio(mcpserver.New(liveStore, simulate))
+	return server.ServeStdio(mcpserver.New(liveStore, simulate, awsClient))
 }
 
 func runUI(ctx context.Context, args []string) error {

@@ -153,3 +153,73 @@ Tools exposed by the Casper MCP server. The agent calls these to query and reaso
 Policies are defined in `.casper/policies.yaml` in the scanned repo. Supported rule types: `must_equal`, `must_not_equal`, `required`, `min_value`. Applies to `resource` (specific type) or `"*"` (all types).
 
 **When to use:** After drafting Terraform, before asking the user to apply it — to validate correctness, understand side effects, check org policy compliance, and reason about whether each change can be safely rolled back.
+
+---
+
+## describe_live_state
+
+**Purpose:** Query live AWS state for a set of resources and compare against Terraform-managed state to detect drift. Resolves scope from a natural-language intent or explicit resource IDs, calls read-only AWS Describe APIs for each resource, and returns per-resource state plus any drift between Terraform and AWS.
+
+**Requires:** `cloud.aws` section in `.casper/config.yaml` with `role_arn` and `regions`. Casper assumes the role for all describe calls — never writes.
+
+**Input:**
+
+| Param | Required | Description |
+|-------|----------|-------------|
+| `intent` | one of `intent` or `resource_ids` | Natural-language description, e.g. `orders database`, `payments service`. Resolves via graph search + 1-hop dependency walk |
+| `resource_ids` | one of `intent` or `resource_ids` | Array of Casper resource identifiers — either `type.name` or internal ID. Skips graph resolution |
+
+Scope is capped at 20 resources per call. If intent resolves more, narrow with `resource_ids`.
+
+**Returns:**
+
+| Field | Description |
+|-------|-------------|
+| `scope_resources` | Identifiers of all resources included in this query |
+| `resources[]` | Per-resource state comparison (see below) |
+| `not_in_terraform[]` | Resources AWS returned that Terraform doesn't track (v0.1: SG rules only) |
+| `errors[]` | Per-resource failures — do not cause the tool call to fail |
+
+**`resources[]` fields:**
+
+| Field | Description |
+|-------|-------------|
+| `identifier` | Casper identifier, e.g. `aws_db_instance.orders_main` |
+| `type` | Terraform resource type |
+| `terraform_state` | Full `attributes` map from the Casper graph (sourced from state files) |
+| `live_aws_state` | Flattened key→value map from the AWS Describe API response |
+| `drift[]` | Fields present in Terraform state whose value differs from AWS — each entry has `field`, `terraform_value`, `aws_value` |
+
+**Supported resource types:**
+
+| Type | AWS API | Notes |
+|------|---------|-------|
+| `aws_db_instance` | `rds:DescribeDBInstances` | |
+| `aws_rds_cluster` | `rds:DescribeDBClusters` | |
+| `aws_db_subnet_group` | `rds:DescribeDBSubnetGroups` | |
+| `aws_security_group` | `ec2:DescribeSecurityGroups` | |
+| `aws_subnet` | `ec2:DescribeSubnets` | |
+| `aws_vpc` | `ec2:DescribeVpcs` | |
+| `aws_instance` | `ec2:DescribeInstances` | |
+| `aws_s3_bucket` | `s3:HeadBucket` + versioning + tags | Partial: existence, versioning, tags only |
+| `aws_iam_role` | `iam:GetRole` | IAM is global — any configured region is used |
+| `aws_lambda_function` | `lambda:GetFunction` | |
+| `aws_eks_cluster` | `eks:DescribeCluster` | |
+
+Unsupported types produce an entry in `errors[]` with the full `supported_types` list.
+
+**Region strategy:** Tries each configured region in order, stops on first success.
+
+**Auth configuration:**
+
+```yaml
+# .casper/config.yaml
+cloud:
+  aws:
+    role_arn: arn:aws:iam::123456789012:role/casper-readonly
+    regions: [ap-south-1, us-east-1]
+```
+
+If the section is absent, the tool returns an error explaining how to configure it.
+
+**When to use:** Before modifying or destroying a resource, to confirm what's actually deployed versus what state files claim — especially after manual changes or partial applies.
