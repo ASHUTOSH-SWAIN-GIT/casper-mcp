@@ -116,9 +116,8 @@ func runIngest(ctx context.Context, args []string) error {
 
 func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	dir     := fs.String("dir", ".", "directory to scan for Terraform files")
+	dir    := fs.String("dir", ".", "directory to scan for Terraform files")
 	htmlOut := fs.String("html", "", "path to write live-updated HTML graph; empty = no HTML output")
-	httpAddr := fs.String("http", "", "enable HTTP transport and listen on this address, e.g. :8080 (omit to use stdio)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -214,25 +213,6 @@ func runServe(ctx context.Context, args []string) error {
 	}
 
 	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies, reloadFromGitHub)
-
-	if *httpAddr != "" {
-		httpSrv := server.NewStreamableHTTPServer(mcpSrv,
-			server.WithEndpointPath("/mcp"),
-			server.WithHeartbeatInterval(15*time.Second),
-		)
-		log.Printf("casper: serving %s over HTTP on %s/mcp (watching for changes)", absDir, *httpAddr)
-		// Shut down the HTTP server cleanly when ctx is cancelled.
-		go func() {
-			<-ctx.Done()
-			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := httpSrv.Shutdown(shutCtx); err != nil {
-				log.Printf("casper: HTTP shutdown error: %v", err)
-			}
-		}()
-		return httpSrv.Start(*httpAddr)
-	}
-
 	log.Printf("casper: serving %s over stdio (watching for changes)", absDir)
 	return server.ServeStdio(mcpSrv)
 }
@@ -565,10 +545,9 @@ func usage() error {
 		"                             Default: writes .mcp.json + .claude/commands/casper.md in the current project.\n" +
 		"                             --global: writes to ~/.claude/settings.json + ~/.claude/commands/casper.md\n" +
 		"                                       so Casper is available in every Claude Code project automatically.\n" +
-		"  serve   -dir <path> [-http <addr>] [-html <path>]\n" +
-		"            Scan a Terraform directory and start the MCP server.\n" +
-		"            Stdio mode (default): used by Claude Code, Cursor, Claude Desktop.\n" +
-		"            HTTP mode (-http :8080): exposes POST/GET/DELETE /mcp for custom clients.\n\n" +
+		"  serve   -dir <path> [-html <path>]\n" +
+		"            Scan a Terraform directory and start the MCP server over stdio.\n" +
+		"            Used by Claude Code, Cursor, and Claude Desktop via .mcp.json.\n\n" +
 		"  ingest  -config <path>   Ingest Terraform into Postgres graph store.\n" +
 		"  migrate -config <path>   Run database migrations.\n" +
 		"  watch   -config <path> -dir <path> -addr <addr>  Watch + ingest + UI.\n" +
