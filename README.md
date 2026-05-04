@@ -12,6 +12,16 @@ An MCP server that gives AI agents a live, queryable view of your Terraform infr
 
 ## Install
 
+**npm / npx (no install needed):**
+```bash
+npx casper-mcp serve --dir /path/to/your/terraform
+```
+
+Or install globally:
+```bash
+npm install -g casper-mcp
+```
+
 **Homebrew (macOS/Linux):**
 ```bash
 brew install ASHUTOSH-SWAIN-GIT/tap/casper-mcp
@@ -39,6 +49,19 @@ casper-mcp serve --dir /path/to/your/terraform --http :8080
 ### Claude Code
 
 Add to `.claude/settings.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "casper": {
+      "command": "npx",
+      "args": ["casper-mcp", "serve", "--dir", "/path/to/your/terraform"]
+    }
+  }
+}
+```
+
+Or if you installed the binary directly:
 
 ```json
 {
