@@ -463,9 +463,11 @@ func runInit(args []string) error {
 	fmt.Printf("created %s\n", commandDest)
 
 	if *global {
-		// For global init, merge the casper server entry into ~/.claude/settings.json.
-		if err := mergeGlobalMCPServer(filepath.Join(home, ".claude", "settings.json")); err != nil {
-			return fmt.Errorf("update global settings: %w", err)
+		// For global init, let Claude Code write the current user-scope MCP
+		// config. Claude Code stores MCP servers in ~/.claude.json, not in
+		// ~/.claude/settings.json.
+		if err := registerGlobalMCPServerWithClaude(); err != nil {
+			return fmt.Errorf("register Claude Code MCP server: %w", err)
 		}
 		fmt.Println("run /casper in any Claude Code session to query that project's infrastructure")
 	} else {
@@ -522,33 +524,27 @@ func writeMCPJSON(dest string) error {
 	return nil
 }
 
-// mergeGlobalMCPServer adds the casper entry to the mcpServers block in the
-// Claude Code user settings file (~/.claude/settings.json).
-func mergeGlobalMCPServer(settingsPath string) error {
-	existing := map[string]any{}
-	if data, err := os.ReadFile(settingsPath); err == nil {
-		_ = json.Unmarshal(data, &existing)
-	}
-
-	servers, _ := existing["mcpServers"].(map[string]any)
-	if servers == nil {
-		servers = map[string]any{}
-	}
-	servers["casper"] = map[string]any{
+// registerGlobalMCPServerWithClaude adds Casper through Claude Code's own MCP
+// CLI so the entry lands in the current user-scope config format.
+func registerGlobalMCPServerWithClaude() error {
+	config := map[string]any{
+		"type":    "stdio",
 		"command": resolveExecutable(),
-		"args":    []string{"serve"},
+		"args":    []string{"serve", "--dir", "."},
 	}
-	existing["mcpServers"] = servers
 
-	data, err := json.MarshalIndent(existing, "", "  ")
+	data, err := json.Marshal(config)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	if err := os.WriteFile(settingsPath, data, 0o644); err != nil {
-		return err
+
+	cmd := exec.Command("claude", "mcp", "add-json", "casper", string(data), "--scope", "user")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w\n%s\ninstall with: claude mcp add-json casper '%s' --scope user", err, strings.TrimSpace(string(out)), data)
 	}
-	fmt.Printf("updated %s\n", settingsPath)
+
+	fmt.Println("registered casper in Claude Code user MCP scope")
 	return nil
 }
 
@@ -556,7 +552,7 @@ func usage() error {
 	return fmt.Errorf("usage: casper-mcp <command> [flags]\n\nCommands:\n" +
 		"  init    [--global]         Create /casper slash command + wire up MCP server.\n" +
 		"                             Default: writes .mcp.json + .claude/commands/casper.md in the current project.\n" +
-		"                             --global: writes to ~/.claude/settings.json + ~/.claude/commands/casper.md\n" +
+		"                             --global: registers a Claude Code user-scope MCP server + ~/.claude/commands/casper.md\n" +
 		"                                       so Casper is available in every Claude Code project automatically.\n" +
 		"  serve   -dir <path> [-html <path>]\n" +
 		"            Scan a Terraform directory and start the MCP server over stdio.\n" +

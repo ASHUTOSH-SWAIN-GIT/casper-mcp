@@ -39,10 +39,10 @@ go install github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/cmd/casper-mcp@latest
 ```bash
 # Install and set up the /casper slash command for Claude Code
 npm install -g casper-mcp
-casper-mcp init --global
+casper-mcp init
 ```
 
-Then add the MCP server to your Claude Code config (see [Connect to Claude](#connect-to-claude)) and run `/casper` to query your infrastructure.
+Then restart Claude Code if it was already running and run `/casper` to query your infrastructure.
 
 ## Commands
 
@@ -58,27 +58,34 @@ casper-mcp serve --dir /path/to/your/terraform --http :8080
 
 ### Claude Code
 
-Add to `.claude/settings.json` in your project:
+Recommended project setup:
+
+```bash
+casper-mcp init
+```
+
+This writes `.mcp.json` in the current project and `.claude/commands/casper.md` for the `/casper` slash command.
+
+To add Casper across all Claude Code projects:
+
+```bash
+casper-mcp init --global
+```
+
+Or add it manually with Claude Code's MCP CLI:
+
+```bash
+claude mcp add-json casper '{"type":"stdio","command":"npx","args":["-y","casper-mcp","serve","--dir","."]}' --scope user
+```
+
+To commit a shared project config manually, add `.mcp.json` at the project root:
 
 ```json
 {
   "mcpServers": {
     "casper": {
       "command": "npx",
-      "args": ["casper-mcp", "serve", "--dir", "/path/to/your/terraform"]
-    }
-  }
-}
-```
-
-Or if you installed the binary directly:
-
-```json
-{
-  "mcpServers": {
-    "casper": {
-      "command": "casper-mcp",
-      "args": ["serve", "--dir", "/path/to/your/terraform"]
+      "args": ["-y", "casper-mcp", "serve", "--dir", "."]
     }
   }
 }

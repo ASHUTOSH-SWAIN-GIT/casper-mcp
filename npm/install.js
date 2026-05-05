@@ -73,17 +73,25 @@ function resolveBinaryPath() {
 
 function installClaudeConfig() {
   try {
-    const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
-    let settings = {};
-    if (fs.existsSync(settingsPath)) {
-      try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch (_) {}
-    }
-    settings.mcpServers = settings.mcpServers || {};
-    settings.mcpServers.casper = { command: resolveBinaryPath(), args: ["serve", "--dir", "."] };
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    console.log("casper-mcp: registered in ~/.claude/settings.json (Claude Code)");
-  } catch (e) { /* non-fatal */ }
+    const config = {
+      type: "stdio",
+      command: resolveBinaryPath(),
+      args: ["serve", "--dir", "."],
+    };
+
+    execFileSync("claude", [
+      "mcp",
+      "add-json",
+      "casper",
+      JSON.stringify(config),
+      "--scope",
+      "user",
+    ], { stdio: "ignore" });
+
+    console.log("casper-mcp: registered with Claude Code (user MCP scope)");
+  } catch (e) {
+    console.log("casper-mcp: skipped Claude Code MCP registration; run `casper-mcp init` inside a project or add it with `claude mcp add-json`");
+  }
 }
 
 function installCodexConfig() {
