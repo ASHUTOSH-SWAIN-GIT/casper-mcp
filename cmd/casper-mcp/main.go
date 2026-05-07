@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"strings"
 	"time"
 
@@ -162,19 +163,34 @@ func runServe(ctx context.Context, args []string) error {
 	}
 
 	// Resolve HTML output path (absolute) so deletions are detected reliably.
+	// Resolved against absDir so the file lives inside the scanned repo, not
+	// wherever the MCP client happened to spawn the subprocess from.
 	var htmlPath string
 	if *htmlOut != "" {
-		if abs, err := filepath.Abs(*htmlOut); err == nil {
-			htmlPath = abs
-		} else {
+		if filepath.IsAbs(*htmlOut) {
 			htmlPath = *htmlOut
-		}
-		// Initial render so the file exists from the moment the server starts.
-		if err := ui.Export(snapshot, htmlPath); err != nil {
-			log.Printf("casper: initial html export failed: %v", err)
 		} else {
-			log.Printf("casper: wrote graph to %s", htmlPath)
+			htmlPath = filepath.Join(absDir, *htmlOut)
 		}
+	}
+
+	// renderEnabled gates the watcher and ticker so the HTML is only written
+	// once the agent explicitly calls render_graph. This makes the graph
+	// strictly opt-in — typing /casper triggers it, otherwise nothing lands
+	// on disk.
+	var renderEnabled atomic.Bool
+
+	renderHTML := func(ctx context.Context) (string, string, int, int, error) {
+		if htmlPath == "" {
+			return "", absDir, 0, 0, fmt.Errorf("html output not configured (server was started without --html)")
+		}
+		snap := liveStore.Snapshot()
+		if err := ui.Export(snap, htmlPath); err != nil {
+			return "", absDir, 0, 0, err
+		}
+		renderEnabled.Store(true)
+		log.Printf("casper: wrote graph to %s (resources=%d edges=%d)", htmlPath, len(snap.Resources), len(snap.Dependencies))
+		return htmlPath, absDir, len(snap.Resources), len(snap.Dependencies), nil
 	}
 
 	go func() {
@@ -219,19 +235,23 @@ func runServe(ctx context.Context, args []string) error {
 				}
 				liveStore.Reload(fresh)
 				log.Printf("casper: reloaded %d resources", len(fresh.Resources))
-				if htmlPath != "" {
+				// Only refresh the HTML if it has been rendered at least
+				// once via render_graph. Until /casper is invoked we keep
+				// the filesystem clean.
+				if htmlPath != "" && renderEnabled.Load() {
 					if err := ui.Export(fresh, htmlPath); err != nil {
 						log.Printf("casper: html export failed: %v", err)
 					}
 				}
 			case <-tickerC:
-				if htmlPath == "" {
+				if htmlPath == "" || !renderEnabled.Load() {
 					continue
 				}
 				if _, err := os.Stat(htmlPath); err == nil {
 					continue
 				}
-				// File missing — recreate from current in-memory snapshot.
+				// File missing after first render — recreate from current
+				// in-memory snapshot.
 				if err := ui.Export(liveStore.Snapshot(), htmlPath); err != nil {
 					log.Printf("casper: html recreate failed: %v", err)
 				} else {
@@ -252,8 +272,8 @@ func runServe(ctx context.Context, args []string) error {
 		return cloneAndReload(ctx, repoURL, token, liveStore)
 	}
 
-	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies, reloadFromGitHub)
-	log.Printf("casper: serving %s over stdio (watching for changes)", absDir)
+	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies, reloadFromGitHub, renderHTML)
+	log.Printf("casper: serving %s over stdio (graph render is lazy — triggered by render_graph / /casper)", absDir)
 	return server.ServeStdio(mcpSrv)
 }
 
@@ -461,34 +481,34 @@ func openBrowser(path string) {
 	}
 }
 
-// casperCommand is the content written to .claude/commands/casper.md
+// casperCommand is the content written to ~/.claude/commands/casper.md
 const casperCommand = `Use the casper MCP tools to build infrastructure context for this project.
 
 $ARGUMENTS
 
 Instructions:
-- If a specific intent or resource was provided in $ARGUMENTS, call get_context with that intent to find relevant resources, dependencies, and examples.
-- If no intent was provided, call dump_graph to get a full snapshot of the infrastructure graph, then summarise: total resources, resource types, and any policy violations.
-- After getting context, briefly describe what you found — resource names, types, dependencies, and anything notable (drift, policy violations, workflow decisions).
+- ALWAYS call render_graph first. This materializes casper/graph.html for the current repo (the file does not exist until you do this). The response includes the absolute path and the directory that was scanned — surface both to the user.
+- After rendering, if a specific intent or resource was provided in $ARGUMENTS, call get_context with that intent to find relevant resources, dependencies, and examples.
+- If no intent was provided, call dump_graph for a full snapshot, then summarise: total resources, resource types, any policy violations.
+- Briefly describe what you found — resource names, types, dependencies, anything notable (drift, policy violations, workflow decisions).
 - If the user wants to make a change, call simulate_impact with the proposed HCL before applying anything.
-- The Casper server renders an interactive graph to casper/graph.html and keeps it in sync with your Terraform files. Mention the path to the user so they can open it in a browser.
+- After the first render_graph call, the file auto-updates whenever .tf files change in the scanned directory.
 `
 
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	client := fs.String("client", "claude-code", "MCP client: claude-code | claude-desktop | cursor | codex")
-	global := fs.Bool("global", false, "register at user scope instead of project (claude-code and cursor only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	switch strings.ToLower(*client) {
 	case "claude-code", "claude":
-		return initClaudeCode(*global)
+		return initClaudeCode()
 	case "claude-desktop", "desktop":
 		return initClaudeDesktop()
 	case "cursor":
-		return initCursor(*global)
+		return initCursor()
 	case "codex":
 		return initCodex()
 	default:
@@ -496,16 +516,17 @@ func runInit(args []string) error {
 	}
 }
 
-func initClaudeCode(global bool) error {
+// initClaudeCode writes the /casper slash command and registers Casper at
+// user scope via the Claude Code CLI. User scope only — project-scope
+// .mcp.json files are intentionally not created so that the same MCP server
+// always operates on the directory of the current Claude Code session.
+func initClaudeCode() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("get home dir: %w", err)
 	}
 
-	commandsDir := filepath.Join(".claude", "commands")
-	if global {
-		commandsDir = filepath.Join(home, ".claude", "commands")
-	}
+	commandsDir := filepath.Join(home, ".claude", "commands")
 	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
 		return fmt.Errorf("create commands dir: %w", err)
 	}
@@ -515,18 +536,10 @@ func initClaudeCode(global bool) error {
 	}
 	fmt.Printf("created %s\n", commandDest)
 
-	if global {
-		if err := registerGlobalMCPServerWithClaude(); err != nil {
-			return fmt.Errorf("register Claude Code MCP server: %w", err)
-		}
-		fmt.Println("run /casper in any Claude Code session to query that project's infrastructure")
-		return nil
+	if err := registerGlobalMCPServerWithClaude(); err != nil {
+		return fmt.Errorf("register Claude Code MCP server: %w", err)
 	}
-
-	if err := writeMCPJSON(".mcp.json"); err != nil {
-		return fmt.Errorf("write .mcp.json: %w", err)
-	}
-	fmt.Println("run /casper in Claude Code inside this project to query your infrastructure")
+	fmt.Println("run /casper in any Claude Code session — Casper operates on that session's directory")
 	return nil
 }
 
@@ -545,26 +558,21 @@ func initClaudeDesktop() error {
 	return nil
 }
 
-func initCursor(global bool) error {
-	dest := filepath.Join(".cursor", "mcp.json")
-	if global {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("get home dir: %w", err)
-		}
-		dest = filepath.Join(home, ".cursor", "mcp.json")
+// initCursor registers Casper in Cursor at user scope (~/.cursor/mcp.json)
+// so a single config covers every Cursor project.
+func initCursor() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home dir: %w", err)
 	}
+	dest := filepath.Join(home, ".cursor", "mcp.json")
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("create cursor config dir: %w", err)
 	}
 	if err := writeMCPJSON(dest); err != nil {
 		return fmt.Errorf("write Cursor mcp.json: %w", err)
 	}
-	scope := "this project"
-	if global {
-		scope = "every Cursor project"
-	}
-	fmt.Printf("restart Cursor — Casper is wired up for %s\n", scope)
+	fmt.Println("restart Cursor — Casper is wired up at user scope")
 	return nil
 }
 
@@ -717,13 +725,13 @@ func registerGlobalMCPServerWithClaude() error {
 
 func usage() error {
 	return fmt.Errorf("usage: casper-mcp <command> [flags]\n\nCommands:\n" +
-		"  init    [--client <c>] [--global]\n" +
-		"            Wire up Casper for an MCP client.\n" +
-		"            --client claude-code   (default) writes .mcp.json + .claude/commands/casper.md\n" +
-		"                                   add --global for ~/.claude.json + ~/.claude/commands/casper.md\n" +
-		"            --client claude-desktop  writes claude_desktop_config.json (user scope)\n" +
-		"            --client cursor        writes .cursor/mcp.json (project)  add --global for ~/.cursor/mcp.json\n" +
-		"            --client codex         writes ~/.codex/config.toml ([mcp_servers.casper] block)\n" +
+		"  init    [--client <c>]\n" +
+		"            Register Casper at user scope for an MCP client. Casper always operates\n" +
+		"            on the directory of the active client session — never a different repo.\n" +
+		"            --client claude-code     (default) ~/.claude.json + ~/.claude/commands/casper.md\n" +
+		"            --client claude-desktop  ~/Library/Application Support/Claude/claude_desktop_config.json\n" +
+		"            --client cursor          ~/.cursor/mcp.json\n" +
+		"            --client codex           ~/.codex/config.toml ([mcp_servers.casper] block)\n" +
 		"  serve   -dir <path> [-html <path>]\n" +
 		"            Scan a Terraform directory and start the MCP server over stdio.\n" +
 		"            Used by Claude Code, Cursor, and Claude Desktop via .mcp.json.\n\n" +

@@ -22,7 +22,12 @@ type SimulateFunc func(code string) (*graph.ImpactResult, error)
 // Passed as nil when the server has no live-reload capability (e.g. postgres mode).
 type ReloadFunc func(ctx context.Context, repoURL, token string) (resourceCount int, depCount int, err error)
 
-func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, policies []policy.Policy, reload ReloadFunc) *server.MCPServer {
+// RenderFunc writes the live graph to disk and returns the absolute output path,
+// the directory the graph was scanned from, and resource/edge counts.
+// Passed as nil when no HTML rendering is configured.
+type RenderFunc func(ctx context.Context) (path string, dir string, resourceCount int, edgeCount int, err error)
+
+func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, policies []policy.Policy, reload ReloadFunc, render RenderFunc) *server.MCPServer {
 	s := server.NewMCPServer(
 		"casper",
 		"0.1.0",
@@ -437,6 +442,37 @@ Individual lookup tools (find_resource, find_similar, get_module_for, get_conven
 					"url":            repoURL,
 					"resource_count": resources,
 					"dep_count":      deps,
+				})
+				return mcp.NewToolResultText(string(payload)), nil
+			},
+		)
+	}
+
+	// render_graph: write the interactive HTML graph for the current session's
+	// directory. The graph is lazy: nothing is written to disk until this tool
+	// (or the watcher, after this tool has been called once) fires. The
+	// /casper slash command instructs the agent to call this first.
+	if render != nil {
+		s.AddTool(
+			mcp.NewTool(
+				"render_graph",
+				mcp.WithDescription("Write the interactive HTML graph (casper/graph.html) for the current Terraform repo. Call this on /casper to materialize the graph the user can open in a browser. The file then auto-updates whenever .tf files change. Returns the absolute path so you can surface it to the user."),
+				mcp.WithTitleAnnotation("Render Graph HTML"),
+				mcp.WithReadOnlyHintAnnotation(false),
+				mcp.WithDestructiveHintAnnotation(false),
+				mcp.WithIdempotentHintAnnotation(true),
+			),
+			func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				path, dir, resCount, edgeCount, err := render(ctx)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("render_graph failed: %v", err)), nil
+				}
+				payload, _ := json.Marshal(map[string]any{
+					"status":         "rendered",
+					"path":           path,
+					"scanned_dir":    dir,
+					"resource_count": resCount,
+					"edge_count":     edgeCount,
 				})
 				return mcp.NewToolResultText(string(payload)), nil
 			},

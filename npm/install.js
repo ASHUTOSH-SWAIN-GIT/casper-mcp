@@ -20,11 +20,12 @@ const SLASH_COMMAND = `Use the casper MCP tools to build infrastructure context 
 $ARGUMENTS
 
 Instructions:
-- If a specific intent or resource was provided in $ARGUMENTS, call get_context with that intent to find relevant resources, dependencies, and examples.
-- If no intent was provided, call dump_graph to get a full snapshot of the infrastructure graph, then summarise: total resources, resource types, and any policy violations.
-- After getting context, briefly describe what you found — resource names, types, dependencies, and anything notable (drift, policy violations, workflow decisions).
+- ALWAYS call render_graph first. This materializes casper/graph.html for the current repo (the file does not exist until you do this). The response includes the absolute path and the directory that was scanned — surface both to the user.
+- After rendering, if a specific intent or resource was provided in $ARGUMENTS, call get_context with that intent to find relevant resources, dependencies, and examples.
+- If no intent was provided, call dump_graph for a full snapshot, then summarise: total resources, resource types, any policy violations.
+- Briefly describe what you found — resource names, types, dependencies, anything notable (drift, policy violations, workflow decisions).
 - If the user wants to make a change, call simulate_impact with the proposed HCL before applying anything.
-- The Casper server renders an interactive graph to casper/graph.html and keeps it in sync with your Terraform files. Mention the path to the user so they can open it in a browser.
+- After the first render_graph call, the file auto-updates whenever .tf files change in the scanned directory.
 `;
 
 function platformKey() {
