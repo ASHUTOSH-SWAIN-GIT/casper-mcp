@@ -160,6 +160,22 @@ func runServe(ctx context.Context, args []string) error {
 		}
 	}
 
+	// Resolve HTML output path (absolute) so deletions are detected reliably.
+	var htmlPath string
+	if *htmlOut != "" {
+		if abs, err := filepath.Abs(*htmlOut); err == nil {
+			htmlPath = abs
+		} else {
+			htmlPath = *htmlOut
+		}
+		// Initial render so the file exists from the moment the server starts.
+		if err := ui.Export(snapshot, htmlPath); err != nil {
+			log.Printf("casper: initial html export failed: %v", err)
+		} else {
+			log.Printf("casper: wrote graph to %s", htmlPath)
+		}
+	}
+
 	go func() {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
@@ -171,6 +187,16 @@ func runServe(ctx context.Context, args []string) error {
 		if err := watchDirRecursive(watcher, absDir); err != nil {
 			log.Printf("casper: watch dir failed: %v", err)
 			return
+		}
+
+		// Tick periodically so a deleted HTML file gets recreated even when
+		// no Terraform change is happening.
+		var ticker *time.Ticker
+		var tickerC <-chan time.Time
+		if htmlPath != "" {
+			ticker = time.NewTicker(5 * time.Second)
+			tickerC = ticker.C
+			defer ticker.Stop()
 		}
 
 		var debounce <-chan time.Time
@@ -192,10 +218,23 @@ func runServe(ctx context.Context, args []string) error {
 				}
 				liveStore.Reload(fresh)
 				log.Printf("casper: reloaded %d resources", len(fresh.Resources))
-				if *htmlOut != "" {
-					if err := ui.Export(fresh, *htmlOut); err != nil {
+				if htmlPath != "" {
+					if err := ui.Export(fresh, htmlPath); err != nil {
 						log.Printf("casper: html export failed: %v", err)
 					}
+				}
+			case <-tickerC:
+				if htmlPath == "" {
+					continue
+				}
+				if _, err := os.Stat(htmlPath); err == nil {
+					continue
+				}
+				// File missing — recreate from current in-memory snapshot.
+				if err := ui.Export(liveStore.Snapshot(), htmlPath); err != nil {
+					log.Printf("casper: html recreate failed: %v", err)
+				} else {
+					log.Printf("casper: recreated %s", htmlPath)
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -431,6 +470,7 @@ Instructions:
 - If no intent was provided, call dump_graph to get a full snapshot of the infrastructure graph, then summarise: total resources, resource types, and any policy violations.
 - After getting context, briefly describe what you found — resource names, types, dependencies, and anything notable (drift, policy violations, workflow decisions).
 - If the user wants to make a change, call simulate_impact with the proposed HCL before applying anything.
+- The Casper server renders an interactive graph to casper/graph.html and keeps it in sync with your Terraform files. Mention the path to the user so they can open it in a browser.
 `
 
 func runInit(args []string) error {
@@ -508,7 +548,7 @@ func writeMCPJSON(dest string) error {
 	}
 	servers["casper"] = map[string]any{
 		"command": resolveExecutable(),
-		"args":    []string{"serve"},
+		"args":    []string{"serve", "--dir", ".", "--html", "casper/graph.html"},
 	}
 	existing["mcpServers"] = servers
 
@@ -530,7 +570,7 @@ func registerGlobalMCPServerWithClaude() error {
 	config := map[string]any{
 		"type":    "stdio",
 		"command": resolveExecutable(),
-		"args":    []string{"serve", "--dir", "."},
+		"args":    []string{"serve", "--dir", ".", "--html", "casper/graph.html"},
 	}
 
 	data, err := json.Marshal(config)

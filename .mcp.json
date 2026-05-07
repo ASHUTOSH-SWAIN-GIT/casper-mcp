@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "casper": {
+      "args": [
+        "serve"
+      ],
+      "command": "casper-mcp"
+    }
+  }
+}
