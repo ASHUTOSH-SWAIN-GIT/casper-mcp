@@ -5,16 +5,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 )
 
 // Export writes a self-contained HTML file with the graph data embedded.
+// The visual layout mirrors the hand-authored reference: vis-network rendering,
+// Tokyo Night palette, sidebar with meta / search / groups legend / resource
+// types breakdown.
 func Export(snapshot graph.GraphSnapshot, outputPath string) error {
-	resp := buildGraphResponse(snapshot)
+	payload := buildExportPayload(snapshot)
 
-	data, err := json.Marshal(resp)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal graph: %w", err)
 	}
@@ -23,271 +28,234 @@ func Export(snapshot graph.GraphSnapshot, outputPath string) error {
 		return err
 	}
 
-	html := buildExportHTML(string(data))
+	html := strings.Replace(exportBase, "/*GRAPH_DATA*/", string(data), 1)
 	return os.WriteFile(outputPath, []byte(html), 0o644)
 }
 
-func buildExportHTML(graphJSON string) string {
-	// Inline the rendering JS from the server template, but initialize from
-	// embedded data instead of fetching /api/graph.
-	return strings.Replace(exportBase, "/*GRAPH_DATA*/", graphJSON, 1)
+type exportNode struct {
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	Title      string `json:"title"`
+	Group      string `json:"group"`
+	Type       string `json:"type"`
+	Module     string `json:"module"`
+	Identifier string `json:"identifier"`
+}
+
+type exportEdge struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Arrows string `json:"arrows"`
+}
+
+type exportType struct {
+	Type  string `json:"type"`
+	Count int    `json:"count"`
+}
+
+type exportMeta struct {
+	ResourceCount int    `json:"resource_count"`
+	DepCount      int    `json:"dep_count"`
+	FetchedAt     string `json:"fetched_at"`
+}
+
+type exportPayload struct {
+	Nodes  []exportNode `json:"nodes"`
+	Edges  []exportEdge `json:"edges"`
+	Groups []string     `json:"groups"`
+	Types  []exportType `json:"types"`
+	Meta   exportMeta   `json:"meta"`
+}
+
+func buildExportPayload(snapshot graph.GraphSnapshot) exportPayload {
+	nodes := make([]exportNode, 0, len(snapshot.Resources))
+	groupSet := map[string]struct{}{}
+	typeCounts := map[string]int{}
+
+	for _, r := range snapshot.Resources {
+		group := groupFor(r.ModulePath)
+		label := shortLabel(r.Identifier)
+		title := r.Identifier + "\n" + r.Type + "\n" + group
+
+		nodes = append(nodes, exportNode{
+			ID:         r.ID,
+			Label:      label,
+			Title:      title,
+			Group:      group,
+			Type:       r.Type,
+			Module:     group,
+			Identifier: r.Identifier,
+		})
+		groupSet[group] = struct{}{}
+		typeCounts[r.Type]++
+	}
+
+	edges := make([]exportEdge, 0, len(snapshot.Dependencies))
+	for _, d := range snapshot.Dependencies {
+		edges = append(edges, exportEdge{From: d.FromResource, To: d.ToResource, Arrows: "to"})
+	}
+
+	groups := make([]string, 0, len(groupSet))
+	for g := range groupSet {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+
+	types := make([]exportType, 0, len(typeCounts))
+	for t, c := range typeCounts {
+		types = append(types, exportType{Type: t, Count: c})
+	}
+	sort.Slice(types, func(i, j int) bool {
+		if types[i].Count != types[j].Count {
+			return types[i].Count > types[j].Count
+		}
+		return types[i].Type < types[j].Type
+	})
+
+	return exportPayload{
+		Nodes:  nodes,
+		Edges:  edges,
+		Groups: groups,
+		Types:  types,
+		Meta: exportMeta{
+			ResourceCount: len(nodes),
+			DepCount:      len(edges),
+			FetchedAt:     time.Now().UTC().Format(time.RFC3339),
+		},
+	}
+}
+
+func groupFor(modulePath string) string {
+	p := strings.TrimSpace(modulePath)
+	if p == "" || p == "root" || p == "." {
+		return "root"
+	}
+	p = strings.TrimPrefix(p, "./")
+	if rest, ok := strings.CutPrefix(p, "modules/"); ok {
+		return "module:" + rest
+	}
+	return p
+}
+
+func shortLabel(identifier string) string {
+	if i := strings.LastIndex(identifier, "."); i >= 0 && i+1 < len(identifier) {
+		return identifier[i+1:]
+	}
+	return identifier
 }
 
 const exportBase = `<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Casper Infrastructure Graph</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    html,body{height:100%;background:#0f1115;color:#e6e6e6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;overflow:hidden}
-    .shell{display:grid;grid-template-columns:280px 1fr;height:100vh}
-    .canvas-wrap{position:relative;overflow:hidden}
-    svg{width:100%;height:100%;display:block}
-    .panel{background:#13161c;border-right:1px solid #222;display:flex;flex-direction:column;overflow:hidden}
-    .panel-section{padding:14px 16px;border-bottom:1px solid #1c1f26;flex-shrink:0}
-    .panel-title{font-size:14px;letter-spacing:0.05em;text-transform:uppercase;color:#7aa2f7;margin-bottom:8px}
-    .counts{font-size:12px;color:#9aa5b1;margin-top:2px}
-    .counts span{color:#e6e6e6;font-weight:500}
-    input[type=search]{width:100%;background:#0f1115;border:1px solid #2a2f3a;color:#e6e6e6;padding:6px 8px;outline:none;font-family:inherit;font-size:12px;border-radius:4px}
-    input[type=search]::placeholder{color:#484f58}
-    input[type=search]:focus{border-color:#7aa2f7}
-    .node-info{padding:14px 16px;border-bottom:1px solid #1c1f26;flex-shrink:0;min-height:90px}
-    .node-info-empty{color:#484f58;font-size:12px}
-    .node-name{color:#e6e6e6;font-size:13px;margin-bottom:4px;word-break:break-all;font-weight:500}
-    .node-type-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#9aa5b1;margin-bottom:8px;font-family:ui-monospace,Menlo,monospace}
-    .node-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-    .node-meta{font-size:11px;color:#9aa5b1;line-height:1.7}
-    .node-meta span{color:#cdd2da}
-    .conn-list{margin-top:6px;display:flex;flex-direction:column;gap:3px;max-height:100px;overflow-y:auto}
-    .conn-item{font-size:11px;color:#9aa5b1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Menlo,monospace}
-    .conn-item span{color:#7aa2f7}
-    .communities-wrap{flex:1;overflow-y:auto}
-    .comm-item{display:flex;align-items:center;gap:8px;padding:7px 16px;cursor:pointer;border-bottom:1px solid #1c1f26}
-    .comm-item:hover{background:#0f1115}
-    .comm-item.active-comm{background:#0f1115;border-left:2px solid #7aa2f7;padding-left:14px}
-    .comm-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-    .comm-name{flex:1;font-size:12px;color:#cdd2da;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .comm-count{font-size:11px;color:#484f58;flex-shrink:0}
-  </style>
+<meta charset="utf-8">
+<title>Casper Infrastructure Graph</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<style>
+  html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f1115;color:#e6e6e6}
+  #app{display:grid;grid-template-columns:280px 1fr;height:100vh}
+  #sidebar{padding:14px;overflow:auto;border-right:1px solid #222;background:#13161c}
+  #sidebar h1{font-size:14px;margin:0 0 8px;letter-spacing:.05em;text-transform:uppercase;color:#7aa2f7}
+  #sidebar h2{font-size:11px;margin:14px 0 6px;color:#9aa5b1;text-transform:uppercase;letter-spacing:.08em}
+  .meta{font-size:12px;color:#9aa5b1;margin-bottom:10px}
+  .meta b{color:#e6e6e6}
+  .row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;border-bottom:1px solid #1c1f26}
+  .row span:last-child{color:#9aa5b1}
+  input[type=text]{width:100%;box-sizing:border-box;padding:6px 8px;background:#0f1115;color:#e6e6e6;border:1px solid #2a2f3a;border-radius:4px;font-size:12px}
+  .legend{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 7px;border-radius:10px;background:#1c1f26;cursor:pointer;user-select:none}
+  .chip.off{opacity:.35}
+  .dot{width:10px;height:10px;border-radius:50%}
+  #network{height:100vh}
+  #info{position:absolute;right:16px;top:16px;max-width:340px;background:#13161cdd;border:1px solid #2a2f3a;border-radius:6px;padding:10px 12px;font-size:12px;display:none}
+  #info h3{margin:0 0 6px;font-size:13px;color:#7aa2f7}
+  #info pre{white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#cdd2da}
+</style>
 </head>
 <body>
-<div class="shell">
-  <aside class="panel">
-    <div class="panel-section">
-      <div class="panel-title">Casper</div>
-      <div class="counts">nodes: <span id="nodeCount">—</span>&ensp;edges: <span id="edgeCount">—</span></div>
+<div id="app">
+  <aside id="sidebar">
+    <h1>Casper Graph</h1>
+    <div class="meta">
+      <div class="row"><span>Resources</span><span><b id="m_res"></b></span></div>
+      <div class="row"><span>Dependencies</span><span><b id="m_dep"></b></span></div>
+      <div class="row"><span>Fetched</span><span id="m_at"></span></div>
     </div>
-    <div class="panel-section" style="padding:10px 16px">
-      <input id="search" type="search" placeholder="search nodes…"/>
-    </div>
-    <div class="node-info" id="nodeInfo"><div class="node-info-empty">Click a node to inspect</div></div>
-    <div class="panel-section" style="padding:10px 16px 8px">
-      <div class="panel-title" style="margin-bottom:0">Communities</div>
-    </div>
-    <div class="communities-wrap" id="commList"></div>
+    <input id="search" type="text" placeholder="Search by name / type…">
+    <h2>Groups</h2>
+    <div id="legend" class="legend"></div>
+    <h2>Resource Types</h2>
+    <div id="types"></div>
   </aside>
-  <main class="canvas-wrap"><svg id="graph"></svg></main>
+  <div id="network"></div>
 </div>
+<div id="info"></div>
 <script>
-const GRAPH_DATA = /*GRAPH_DATA*/;
+const DATA = /*GRAPH_DATA*/;
 
-const svgEl=document.getElementById("graph");
-const searchEl=document.getElementById("search");
-const nodeCountEl=document.getElementById("nodeCount");
-const edgeCountEl=document.getElementById("edgeCount");
-const nodeInfoEl=document.getElementById("nodeInfo");
-const commListEl=document.getElementById("commList");
+const palette = ["#7aa2f7","#bb9af7","#9ece6a","#e0af68","#f7768e","#7dcfff","#ff9e64","#73daca","#c0caf5","#b4f9f8","#ffc777","#c099ff","#86e1fc","#fb7185","#a9b1d6","#ff8e72","#5eead4","#facc15","#f472b6","#34d399"];
+const groupColor = {};
+DATA.groups.forEach((g,i)=> groupColor[g] = palette[i % palette.length]);
 
-const PALETTE=["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#a855f7","#ec4899","#06b6d4","#84cc16","#f59e0b","#10b981","#6366f1","#e11d48","#0ea5e9","#8b5cf6","#d946ef","#64748b","#fb923c","#4ade80"];
+document.getElementById('m_res').textContent = DATA.meta.resource_count;
+document.getElementById('m_dep').textContent = DATA.meta.dep_count;
+document.getElementById('m_at').textContent = DATA.meta.fetched_at;
 
-const state={data:null,selectedId:null,filterComm:null,visibleIds:new Set(),pan:{x:0,y:0},zoom:1,dragging:false,dragStart:null,panStart:null};
-let vpEl=null;
+const legend = document.getElementById('legend');
+const groupOn = {};
+DATA.groups.forEach(g=>{
+  groupOn[g]=true;
+  const el = document.createElement('span');
+  el.className='chip';
+  el.dataset.group=g;
+  el.innerHTML = '<span class="dot" style="background:'+groupColor[g]+'"></span>'+g;
+  el.onclick=()=>{ groupOn[g]=!groupOn[g]; el.classList.toggle('off',!groupOn[g]); applyFilter(); };
+  legend.appendChild(el);
+});
 
-function communityKey(n){
-  // Infra resources: group by resource type (e.g. aws_vpc, aws_subnet)
-  if(n.type!=="terraform_module"&&n.type!=="terraform_convention")return n.type;
-  // Module/convention nodes: group by last path segment
-  const parts=n.label.replace(/\\/g,"/").split("/").filter(Boolean);
-  if(parts.length>=2)return parts.slice(-2,-1)[0]+"/"+parts.slice(-1)[0];
-  if(parts.length===1)return parts[0];
-  return n.type;
-}
-function buildCommunities(nodes){
-  const map=new Map();
-  for(const n of nodes){const k=communityKey(n);if(!map.has(k))map.set(k,[]);map.get(k).push(n.id);}
-  const sorted=[...map.entries()].sort((a,b)=>b[1].length-a[1].length);
-  const out=new Map();
-  sorted.forEach(([key,ids],i)=>out.set(key,{color:PALETTE[i%PALETTE.length],ids,key}));
-  return out;
-}
-function prepare(data){
-  const N=data.nodes.length;
-  // Scale canvas with node count so large repos don't overlap
-  const W=Math.max(1800,Math.ceil(Math.sqrt(N)*130));
-  const H=Math.round(W*0.88);
-  const communities=buildCommunities(data.nodes);
-  const nodes=data.nodes.map(n=>({...n,community:communityKey(n),color:communities.get(communityKey(n))?.color||"#8b949e",x:W/2,y:H/2,vx:0,vy:0}));
-  const nodeById=new Map(nodes.map(n=>[n.id,n]));
-  const edges=data.edges.filter(e=>nodeById.has(e.from)&&nodeById.has(e.to));
-  return{nodes,edges,nodeById,W,H,communities};
-}
-function layout(){
-  const{nodes,edges,W,H}=state.data;
-  const N=nodes.length;
-  const comms=[...state.data.communities.entries()].sort((a,b)=>b[1].ids.length-a[1].ids.length);
-  const cx=W/2,cy=H/2;
-  // Scale ring radii with number of communities so centers don't pile up
-  const cs=Math.max(1,Math.sqrt(comms.length/5));
-  const centers=new Map();
-  comms.forEach(([key,c],i)=>{
-    let r,angle;
-    if(i===0){r=0;angle=0;}
-    else if(i<=6){r=(100+c.ids.length*5)*cs;angle=(2*Math.PI*(i-1)/6)-Math.PI/2;}
-    else if(i<=16){r=(220+c.ids.length*4)*cs;angle=(2*Math.PI*(i-7)/10)-Math.PI/6;}
-    else{r=(360+Math.floor((i-17)/10)*120)*cs;angle=(2*Math.PI*(i-17)/Math.max(comms.length-17,1));}
-    centers.set(key,{x:cx+r*Math.cos(angle),y:cy+r*Math.sin(angle)});
+const typesEl = document.getElementById('types');
+DATA.types.forEach(t=>{
+  const r=document.createElement('div'); r.className='row';
+  r.innerHTML = '<span>'+t.type+'</span><span>'+t.count+'</span>';
+  typesEl.appendChild(r);
+});
+
+const nodes = new vis.DataSet(DATA.nodes.map(n=>({
+  id:n.id, label:n.label, title:n.title, group:n.group,
+  color:{background:groupColor[n.group], border:'#1a1d23', highlight:{background:'#fff', border:groupColor[n.group]}},
+  font:{color:'#e6e6e6', size:11},
+  shape:'dot', size:10,
+  _type:n.type, _module:n.module, _identifier:n.identifier,
+})));
+const edges = new vis.DataSet(DATA.edges.map((e,i)=>({id:'e'+i, from:e.from, to:e.to, arrows:e.arrows, color:{color:'#2a2f3a',highlight:'#7aa2f7'}, smooth:{type:'continuous'}})));
+
+const network = new vis.Network(document.getElementById('network'), {nodes, edges}, {
+  physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{gravitationalConstant:-40, springLength:90, springConstant:0.08}, stabilization:{iterations:300}},
+  interaction:{ hover:true, tooltipDelay:120 },
+  edges:{ width:0.6 },
+});
+
+const info = document.getElementById('info');
+network.on('click', p=>{
+  if(!p.nodes.length){ info.style.display='none'; return; }
+  const n = nodes.get(p.nodes[0]);
+  info.style.display='block';
+  info.innerHTML = '<h3>'+n._identifier+'</h3><pre>type:    '+n._type+'\ngroup:   '+n.group+'\nmodule:  '+n._module+'</pre>';
+});
+
+const search = document.getElementById('search');
+search.addEventListener('input', applyFilter);
+
+function applyFilter(){
+  const q = search.value.toLowerCase().trim();
+  const visibleIds = new Set();
+  DATA.nodes.forEach(n=>{
+    const groupOk = groupOn[n.group];
+    const qOk = !q || n.label.toLowerCase().includes(q) || n.type.toLowerCase().includes(q) || n.module.toLowerCase().includes(q);
+    if(groupOk && qOk) visibleIds.add(n.id);
   });
-  const byComm=new Map();
-  for(const[key]of comms)byComm.set(key,[]);
-  for(const n of nodes)byComm.get(n.community)?.push(n);
-  for(const[key,members]of byComm){
-    const center=centers.get(key)||{x:cx,y:cy};
-    const total=members.length;
-    if(total===1){members[0].x=center.x;members[0].y=center.y;continue;}
-    // Scale ring spacing by community size so big communities don't overlap
-    const spacing=Math.max(20,Math.sqrt(total)*7);
-    members.forEach((n,i)=>{
-      if(i===0){n.x=center.x;n.y=center.y;return;}
-      const ring=Math.ceil((Math.sqrt(4*i+1)-1)/2);
-      const ringStart=ring*(ring-1);
-      const ringTotal=ring*6<total-ringStart?ring*6:total-ringStart;
-      const ringIdx=i-ringStart-1;
-      const r=ring*spacing;
-      const angle=(2*Math.PI*ringIdx/Math.max(ringTotal,1));
-      n.x=center.x+r*Math.cos(angle)+(Math.random()-0.5)*3;
-      n.y=center.y+r*Math.sin(angle)+(Math.random()-0.5)*3;
-    });
-  }
-  // Force simulation: edge springs + node repulsion
-  const minSep=24;
-  const steps=60;
-  for(let s=0;s<steps;s++){
-    for(const n of nodes){n.vx*=0.6;n.vy*=0.6;}
-    // Edge spring attraction
-    for(const e of edges){
-      const a=state.data.nodeById.get(e.from),b=state.data.nodeById.get(e.to);
-      if(!a||!b)continue;
-      const dx=b.x-a.x,dy=b.y-a.y,d=Math.max(Math.hypot(dx,dy),1);
-      const f=(d-50)*0.025,fx=dx/d*f,fy=dy/d*f;
-      a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy;
-    }
-    // Node repulsion (only for manageable sizes)
-    if(N<=600){
-      for(let i=0;i<nodes.length;i++){
-        for(let j=i+1;j<nodes.length;j++){
-          const a=nodes[i],b=nodes[j];
-          const dx=b.x-a.x,dy=b.y-a.y,d=Math.max(Math.hypot(dx,dy),0.1);
-          if(d<minSep){
-            const f=(minSep-d)/d*0.5;
-            a.vx-=dx*f;a.vy-=dy*f;
-            b.vx+=dx*f;b.vy+=dy*f;
-          }
-        }
-      }
-    }
-    for(const n of nodes){n.x+=n.vx;n.y+=n.vy;}
-  }
+  nodes.update(DATA.nodes.map(n=>({id:n.id, hidden:!visibleIds.has(n.id)})));
+  edges.update(DATA.edges.map((e,i)=>({id:'e'+i, hidden: !(visibleIds.has(e.from) && visibleIds.has(e.to))})));
 }
-function fitView(){
-  const{nodes}=state.data;
-  if(!nodes.length)return;
-  const rect=svgEl.getBoundingClientRect();
-  const pad=60;
-  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
-  for(const n of nodes){x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x);y1=Math.max(y1,n.y);}
-  const scale=Math.min(rect.width/(x1-x0+pad*2),rect.height/(y1-y0+pad*2),1);
-  state.zoom=scale;state.pan.x=rect.width/2-(x0+x1)/2*scale;state.pan.y=rect.height/2-(y0+y1)/2*scale;
-}
-function applyFilters(q,comm){
-  return new Set(state.data.nodes.filter(n=>{
-    if(q&&!n.search_text.includes(q))return false;
-    if(comm&&communityKey(n)!==comm)return false;
-    return true;
-  }).map(n=>n.id));
-}
-function renderGraph(transformOnly){
-  if(!state.data)return;
-  if(transformOnly&&vpEl){vpEl.setAttribute("transform","translate("+state.pan.x+","+state.pan.y+") scale("+state.zoom+")");return;}
-  const visible=new Set(state.data.nodes.filter(n=>state.visibleIds.has(n.id)).map(n=>n.id));
-  const conn=neighbors(state.selectedId);
-  const showLabels=state.zoom>0.42;
-  let out='<rect width="100%" height="100%" fill="#0f1115"/><g id="vp" transform="translate('+state.pan.x+','+state.pan.y+') scale('+state.zoom+')">';
-  for(const e of state.data.edges){
-    if(!visible.has(e.from)||!visible.has(e.to))continue;
-    const a=state.data.nodeById.get(e.from),b=state.data.nodeById.get(e.to);
-    const active=state.selectedId&&(e.from===state.selectedId||e.to===state.selectedId);
-    out+='<line x1="'+a.x+'" y1="'+a.y+'" x2="'+b.x+'" y2="'+b.y+'" stroke="'+(active?a.color:'rgba(255,255,255,0.1)')+'" stroke-width="'+(active?1.4:0.6)+'"/>';
-  }
-  for(const n of state.data.nodes){
-    if(!visible.has(n.id))continue;
-    const active=state.selectedId===n.id,rel=conn.has(n.id),dim=state.selectedId&&!active&&!rel;
-    const r=n.type==="terraform_module"?11:n.type==="terraform_convention"?9:7;
-    const op=dim?0.13:1;
-    out+='<g data-node="'+n.id+'" style="cursor:pointer;opacity:'+op+'">';
-    if(active)out+='<circle cx="'+n.x+'" cy="'+n.y+'" r="'+(r+5)+'" fill="'+n.color+'" opacity="0.18"/>';
-    out+='<circle cx="'+n.x+'" cy="'+n.y+'" r="'+r+'" fill="'+n.color+'" stroke="'+(active?'rgba(255,255,255,0.7)':'rgba(0,0,0,0.25)')+'" stroke-width="'+(active?1.2:0.4)+'"/>';
-    if((showLabels&&!dim)||active)out+='<text x="'+n.x+'" y="'+(n.y+r+11)+'" fill="'+(active?'#e6edf3':'rgba(180,195,210,0.6)')+'" text-anchor="middle" font-size="9" font-family="ui-monospace,monospace">'+esc(clip(n.label))+'</text>';
-    out+='</g>';
-  }
-  out+='</g>';
-  svgEl.innerHTML=out;
-  vpEl=svgEl.querySelector("#vp");
-  svgEl.querySelectorAll("[data-node]").forEach(el=>{
-    el.addEventListener("click",ev=>{ev.stopPropagation();const id=el.getAttribute("data-node");state.selectedId=state.selectedId===id?null:id;renderGraph(false);renderNodeInfo();renderCommList();});
-  });
-}
-function renderNodeInfo(){
-  if(!state.data||!state.selectedId){nodeInfoEl.innerHTML='<div class="node-info-empty">Click a node to inspect</div>';return;}
-  const n=state.data.nodeById.get(state.selectedId);
-  if(!n){nodeInfoEl.innerHTML='<div class="node-info-empty">Click a node to inspect</div>';return;}
-  const relEdges=state.data.edges.filter(e=>e.from===n.id||e.to===n.id);
-  const connHtml=relEdges.length?relEdges.map(e=>{const otherId=e.from===n.id?e.to:e.from;const other=state.data.nodeById.get(otherId);return'<div class="conn-item"><span>'+(e.from===n.id?"→":"←")+'</span> '+esc(clip(other?.label||otherId))+'</div>';}).join(""):'<div class="conn-item" style="color:#3d444d">no connections</div>';
-  nodeInfoEl.innerHTML='<div class="node-name">'+esc(shortName(n.label))+'</div><div class="node-type-badge"><span class="node-dot" style="background:'+n.color+'"></span>'+esc(n.type)+'</div><div class="node-meta">'+(n.module_path?'path: <span>'+esc(shortName(n.module_path))+'</span><br>':'')+'community: <span>'+esc(n.community)+'</span>'+(relEdges.length?'<br>connections: <span>'+relEdges.length+'</span>':'')+'</div>'+(relEdges.length?'<div class="conn-list">'+connHtml+'</div>':'');
-}
-function renderCommList(){
-  if(!state.data)return;
-  const comms=[...state.data.communities.values()].sort((a,b)=>b.ids.length-a.ids.length);
-  commListEl.innerHTML=comms.map(c=>{const active=state.filterComm===c.key;const visCount=c.ids.filter(id=>state.visibleIds.has(id)).length;return'<div class="comm-item'+(active?' active-comm':'')+'" data-comm="'+esc(c.key)+'"><span class="comm-dot" style="background:'+c.color+'"></span><span class="comm-name">'+esc(c.key)+'</span><span class="comm-count">'+visCount+'</span></div>';}).join("");
-  commListEl.querySelectorAll("[data-comm]").forEach(el=>{el.addEventListener("click",()=>{const key=el.getAttribute("data-comm");state.filterComm=state.filterComm===key?null:key;const q=searchEl.value.trim().toLowerCase();state.visibleIds=applyFilters(q,state.filterComm);if(state.selectedId&&!state.visibleIds.has(state.selectedId))state.selectedId=null;renderGraph(false);renderNodeInfo();renderCommList();});});
-}
-svgEl.addEventListener("click",()=>{if(state.selectedId){state.selectedId=null;renderGraph(false);renderNodeInfo();}});
-svgEl.addEventListener("wheel",ev=>{ev.preventDefault();const rect=svgEl.getBoundingClientRect();const mx=ev.clientX-rect.left,my=ev.clientY-rect.top;const f=ev.deltaY<0?1.12:0.9;state.pan.x=mx-(mx-state.pan.x)*f;state.pan.y=my-(my-state.pan.y)*f;state.zoom=Math.max(0.05,Math.min(8,state.zoom*f));renderGraph(true);},{passive:false});
-svgEl.addEventListener("mousedown",ev=>{if(ev.button!==0)return;state.dragging=true;state.dragStart={x:ev.clientX,y:ev.clientY};state.panStart={x:state.pan.x,y:state.pan.y};svgEl.style.cursor="grabbing";});
-window.addEventListener("mousemove",ev=>{if(!state.dragging)return;state.pan.x=state.panStart.x+(ev.clientX-state.dragStart.x);state.pan.y=state.panStart.y+(ev.clientY-state.dragStart.y);renderGraph(true);});
-window.addEventListener("mouseup",()=>{state.dragging=false;svgEl.style.cursor="";});
-searchEl.addEventListener("input",()=>{if(!state.data)return;const q=searchEl.value.trim().toLowerCase();state.visibleIds=applyFilters(q,state.filterComm);if(state.selectedId&&!state.visibleIds.has(state.selectedId))state.selectedId=null;renderGraph(false);renderNodeInfo();renderCommList();});
-function neighbors(id){const ids=new Set();if(!id||!state.data)return ids;ids.add(id);for(const e of state.data.edges){if(e.from===id)ids.add(e.to);if(e.to===id)ids.add(e.from);}return ids;}
-function shortName(label){
-  // "aws_vpc.main" → show as-is; path-based labels → last 2 segments
-  if(!label.includes("/"))return label;
-  const parts=label.replace(/\\/g,"/").split("/").filter(Boolean);
-  if(parts.length<=2)return label;
-  return parts.slice(-2).join("/");
-}
-function clip(s){const n=shortName(s);return n.length<=24?n:n.slice(0,21)+"...";}
-function esc(s){return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");}
-
-state.data=prepare(GRAPH_DATA);
-state.visibleIds=new Set(state.data.nodes.map(n=>n.id));
-nodeCountEl.textContent=state.data.nodes.length;
-edgeCountEl.textContent=state.data.edges.length;
-layout();
-fitView();
-renderGraph(false);
-renderCommList();
-renderNodeInfo();
 </script>
 </body>
 </html>`
