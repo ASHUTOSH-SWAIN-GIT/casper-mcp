@@ -1,103 +1,104 @@
-package workflow
+package workflow_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/workflow"
 )
 
 func TestDetectEnv_FromTag(t *testing.T) {
-	res := ResourceInput{Tags: map[string]string{"env": "production"}}
-	if got := detectEnv(res); got != "prod" {
+	res := workflow.ResourceInput{Tags: map[string]string{"env": "production"}}
+	if got := workflow.DetectEnv(res); got != "prod" {
 		t.Errorf("expected prod, got %s", got)
 	}
 }
 
 func TestDetectEnv_FromModulePath(t *testing.T) {
-	res := ResourceInput{ModulePath: "/infra/modules/prod/rds"}
-	if got := detectEnv(res); got != "prod" {
+	res := workflow.ResourceInput{ModulePath: "/infra/modules/prod/rds"}
+	if got := workflow.DetectEnv(res); got != "prod" {
 		t.Errorf("expected prod, got %s", got)
 	}
 }
 
 func TestDetectEnv_StagingBeatingDev(t *testing.T) {
-	res := ResourceInput{
+	res := workflow.ResourceInput{
 		Tags:       map[string]string{"env": "dev"},
 		ModulePath: "/infra/staging/rds",
 	}
-	if got := detectEnv(res); got != "staging" {
+	if got := workflow.DetectEnv(res); got != "staging" {
 		t.Errorf("expected staging, got %s", got)
 	}
 }
 
 func TestDetectEnv_FailClosed(t *testing.T) {
-	res := ResourceInput{Identifier: "aws_db_instance.orders"}
-	if got := detectEnv(res); got != "prod" {
+	res := workflow.ResourceInput{Identifier: "aws_db_instance.orders"}
+	if got := workflow.DetectEnv(res); got != "prod" {
 		t.Errorf("expected prod (fail-closed), got %s", got)
 	}
 }
 
 func TestResourceFamily(t *testing.T) {
 	cases := map[string]string{
-		"aws_db_instance":   "database",
-		"aws_rds_cluster":   "database",
-		"aws_iam_role":      "iam",
+		"aws_db_instance":    "database",
+		"aws_rds_cluster":    "database",
+		"aws_iam_role":       "iam",
 		"aws_security_group": "network_security",
-		"aws_eks_cluster":   "compute",
-		"aws_s3_bucket":     "storage",
-		"aws_unknown_type":  "",
+		"aws_eks_cluster":    "compute",
+		"aws_s3_bucket":      "storage",
+		"aws_unknown_type":   "",
 	}
 	for rtype, want := range cases {
-		if got := resourceFamily(rtype); got != want {
-			t.Errorf("resourceFamily(%q) = %q, want %q", rtype, got, want)
+		if got := workflow.ResourceFamily(rtype); got != want {
+			t.Errorf("ResourceFamily(%q) = %q, want %q", rtype, got, want)
 		}
 	}
 }
 
 func TestEvaluate_NoRules(t *testing.T) {
-	result := Evaluate(nil, []ResourceInput{{Identifier: "aws_db_instance.orders", Type: "aws_db_instance", Operation: "destroy"}})
+	result := workflow.Evaluate(nil, []workflow.ResourceInput{{Identifier: "aws_db_instance.orders", Type: "aws_db_instance", Operation: "destroy"}})
 	if result != nil {
 		t.Errorf("expected nil for no rules, got %+v", result)
 	}
 }
 
 func TestEvaluate_NoMatch(t *testing.T) {
-	rules := []WorkflowRule{
+	rules := []workflow.WorkflowRule{
 		{
 			ID:       "prod-db-destroy",
-			When:     RuleCondition{Env: "prod", Operation: StringList{"destroy"}, ResourceTypeFamily: "database"},
+			When:     workflow.RuleCondition{Env: "prod", Operation: workflow.StringList{"destroy"}, ResourceTypeFamily: "database"},
 			Decision: "block",
 		},
 	}
-	// staging env — should not match the prod rule
-	res := ResourceInput{
+	res := workflow.ResourceInput{
 		Identifier: "aws_db_instance.orders",
 		Type:       "aws_db_instance",
 		Operation:  "destroy",
 		Tags:       map[string]string{"env": "staging"},
 	}
-	result := Evaluate(rules, []ResourceInput{res})
+	result := workflow.Evaluate(rules, []workflow.ResourceInput{res})
 	if result.Decision != "allow" {
 		t.Errorf("expected allow for non-matching, got %s", result.Decision)
 	}
 }
 
 func TestEvaluate_Block(t *testing.T) {
-	rules := []WorkflowRule{
+	rules := []workflow.WorkflowRule{
 		{
 			ID:       "prod-db-destroy",
-			When:     RuleCondition{Env: "prod", Operation: StringList{"destroy"}, ResourceTypeFamily: "database"},
+			When:     workflow.RuleCondition{Env: "prod", Operation: workflow.StringList{"destroy"}, ResourceTypeFamily: "database"},
 			Decision: "block",
 			Reason:   "database destroy requires manual ticket",
 		},
 	}
-	res := ResourceInput{
+	res := workflow.ResourceInput{
 		Identifier: "aws_db_instance.orders",
 		Type:       "aws_db_instance",
 		Operation:  "destroy",
 		Tags:       map[string]string{"env": "prod"},
 	}
-	result := Evaluate(rules, []ResourceInput{res})
+	result := workflow.Evaluate(rules, []workflow.ResourceInput{res})
 	if result.Decision != "block" {
 		t.Errorf("expected block, got %s", result.Decision)
 	}
@@ -110,20 +111,20 @@ func TestEvaluate_Block(t *testing.T) {
 }
 
 func TestEvaluate_RequireApproval(t *testing.T) {
-	rules := []WorkflowRule{
+	rules := []workflow.WorkflowRule{
 		{
 			ID:       "prod-changes",
-			When:     RuleCondition{Env: "prod", Operation: StringList{"create", "modify", "destroy"}},
+			When:     workflow.RuleCondition{Env: "prod", Operation: workflow.StringList{"create", "modify", "destroy"}},
 			Decision: "require_approval",
 		},
 	}
-	res := ResourceInput{
+	res := workflow.ResourceInput{
 		Identifier: "aws_s3_bucket.assets",
 		Type:       "aws_s3_bucket",
 		Operation:  "create",
 		Tags:       map[string]string{"env": "prod"},
 	}
-	result := Evaluate(rules, []ResourceInput{res})
+	result := workflow.Evaluate(rules, []workflow.ResourceInput{res})
 	if result.Decision != "require_approval" {
 		t.Errorf("expected require_approval, got %s", result.Decision)
 	}
@@ -133,33 +134,31 @@ func TestEvaluate_RequireApproval(t *testing.T) {
 }
 
 func TestEvaluate_StricterDecisionWins(t *testing.T) {
-	// More-specific block rule comes before the broader require_approval rule.
-	// First match per resource wins; strictest decision across all resources wins overall.
-	rules := []WorkflowRule{
-		{ID: "r2", When: RuleCondition{ResourceTypeFamily: "database", Operation: StringList{"destroy"}}, Decision: "block"},
-		{ID: "r1", When: RuleCondition{Env: "prod"}, Decision: "require_approval"},
+	rules := []workflow.WorkflowRule{
+		{ID: "r2", When: workflow.RuleCondition{ResourceTypeFamily: "database", Operation: workflow.StringList{"destroy"}}, Decision: "block"},
+		{ID: "r1", When: workflow.RuleCondition{Env: "prod"}, Decision: "require_approval"},
 	}
-	resources := []ResourceInput{
+	resources := []workflow.ResourceInput{
 		{Identifier: "aws_s3_bucket.assets", Type: "aws_s3_bucket", Operation: "create", Tags: map[string]string{"env": "prod"}},
 		{Identifier: "aws_db_instance.orders", Type: "aws_db_instance", Operation: "destroy"},
 	}
-	result := Evaluate(rules, resources)
+	result := workflow.Evaluate(rules, resources)
 	if result.Decision != "block" {
 		t.Errorf("expected block (strictest), got %s", result.Decision)
 	}
 }
 
 func TestEvaluate_CustomRequiredSteps(t *testing.T) {
-	rules := []WorkflowRule{
+	rules := []workflow.WorkflowRule{
 		{
 			ID:            "security-review",
-			When:          RuleCondition{ResourceTypeFamily: "iam"},
+			When:          workflow.RuleCondition{ResourceTypeFamily: "iam"},
 			Decision:      "require_security_review",
 			RequiredSteps: []string{"iam_review_ticket", "security_lead_approval"},
 		},
 	}
-	res := ResourceInput{Type: "aws_iam_role", Operation: "create"}
-	result := Evaluate(rules, []ResourceInput{res})
+	res := workflow.ResourceInput{Type: "aws_iam_role", Operation: "create"}
+	result := workflow.Evaluate(rules, []workflow.ResourceInput{res})
 	if result.Decision != "require_security_review" {
 		t.Errorf("expected require_security_review, got %s", result.Decision)
 	}
@@ -169,7 +168,7 @@ func TestEvaluate_CustomRequiredSteps(t *testing.T) {
 }
 
 func TestLoad_AbsentFile(t *testing.T) {
-	rules, err := Load(t.TempDir())
+	rules, err := workflow.Load(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +200,7 @@ workflow_rules:
 		t.Fatal(err)
 	}
 
-	rules, err := Load(dir)
+	rules, err := workflow.Load(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

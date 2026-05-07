@@ -1,9 +1,10 @@
-package awslive
+package awslive_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/awslive"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 )
 
@@ -13,11 +14,10 @@ func makeSnapshot() graph.GraphSnapshot {
 			{ID: "r1", Type: "aws_db_instance", Identifier: "aws_db_instance.orders_main"},
 			{ID: "r2", Type: "aws_security_group", Identifier: "aws_security_group.orders_db"},
 			{ID: "r3", Type: "aws_subnet", Identifier: "aws_subnet.private_a"},
-			{ID: "r4", Type: "terraform_module", Identifier: "module.orders"},   // meta — must be excluded
+			{ID: "r4", Type: "terraform_module", Identifier: "module.orders"},
 			{ID: "r5", Type: "aws_db_instance", Identifier: "aws_db_instance.payments_main"},
 		},
 		Dependencies: []graph.Dependency{
-			// orders_main depends on orders_db sg and private_a subnet
 			{FromResource: "r1", ToResource: "r2", Kind: "reference"},
 			{FromResource: "r1", ToResource: "r3", Kind: "reference"},
 		},
@@ -26,7 +26,7 @@ func makeSnapshot() graph.GraphSnapshot {
 
 func TestResolveScope_ByResourceID(t *testing.T) {
 	store := graph.NewMemStore(makeSnapshot())
-	scope, err := ResolveScope(context.Background(), store, "", []string{"aws_db_instance.orders_main"})
+	scope, err := awslive.ResolveScope(context.Background(), store, "", []string{"aws_db_instance.orders_main"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +37,7 @@ func TestResolveScope_ByResourceID(t *testing.T) {
 
 func TestResolveScope_ByIntent_IncludesOnehopDeps(t *testing.T) {
 	store := graph.NewMemStore(makeSnapshot())
-	// "orders_main" should resolve r1, then pull in r2 (sg) and r3 (subnet) via deps.
-	scope, err := ResolveScope(context.Background(), store, "orders_main", nil)
+	scope, err := awslive.ResolveScope(context.Background(), store, "orders_main", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +58,7 @@ func TestResolveScope_ByIntent_IncludesOnehopDeps(t *testing.T) {
 
 func TestResolveScope_ExcludesMetaTypes(t *testing.T) {
 	store := graph.NewMemStore(makeSnapshot())
-	scope, err := ResolveScope(context.Background(), store, "orders", nil)
+	scope, err := awslive.ResolveScope(context.Background(), store, "orders", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +71,13 @@ func TestResolveScope_ExcludesMetaTypes(t *testing.T) {
 
 func TestResolveScope_ErrorOnUnknownResourceID(t *testing.T) {
 	store := graph.NewMemStore(makeSnapshot())
-	_, err := ResolveScope(context.Background(), store, "", []string{"aws_db_instance.nonexistent"})
+	_, err := awslive.ResolveScope(context.Background(), store, "", []string{"aws_db_instance.nonexistent"})
 	if err == nil {
 		t.Fatal("expected error for unknown resource ID")
 	}
 }
 
 func TestResolveScope_CapAt20(t *testing.T) {
-	// Build a snapshot with 25 resources and request all 25 by ID.
 	var resources []graph.Resource
 	var ids []string
 	for i := 0; i < 25; i++ {
@@ -92,7 +90,7 @@ func TestResolveScope_CapAt20(t *testing.T) {
 		ids = append(ids, id)
 	}
 	store := graph.NewMemStore(graph.GraphSnapshot{Resources: resources})
-	_, err := ResolveScope(context.Background(), store, "", ids)
+	_, err := awslive.ResolveScope(context.Background(), store, "", ids)
 	if err == nil {
 		t.Fatal("expected cap error when scope exceeds 20")
 	}
@@ -100,8 +98,7 @@ func TestResolveScope_CapAt20(t *testing.T) {
 
 func TestResolveScope_DeduplicatesResources(t *testing.T) {
 	store := graph.NewMemStore(makeSnapshot())
-	// Passing the same identifier twice should yield one resource.
-	scope, err := ResolveScope(context.Background(), store, "",
+	scope, err := awslive.ResolveScope(context.Background(), store, "",
 		[]string{"aws_db_instance.orders_main", "aws_db_instance.orders_main"})
 	if err != nil {
 		t.Fatal(err)

@@ -1,9 +1,15 @@
-package terraformcode
+package terraformcode_test
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest/terraformcode"
+)
 
 func TestParseDir(t *testing.T) {
-	resources, err := ParseDir("testdata/modules/postgres")
+	path := filepath.Join("..", "..", "..", "internal", "ingest", "terraformcode", "testdata", "modules", "postgres")
+	resources, err := terraformcode.ParseDir(path)
 	if err != nil {
 		t.Fatalf("ParseDir() error = %v", err)
 	}

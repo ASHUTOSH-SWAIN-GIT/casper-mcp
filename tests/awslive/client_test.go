@@ -1,13 +1,15 @@
-package awslive
+package awslive_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/awslive"
 )
 
 func TestLoadConfig_MissingFile(t *testing.T) {
-	_, ok, err := LoadConfig(t.TempDir())
+	_, ok, err := awslive.LoadConfig(t.TempDir())
 	if err != nil {
 		t.Fatalf("expected no error for missing config, got %v", err)
 	}
@@ -32,7 +34,7 @@ states:
 	if err := os.WriteFile(filepath.Join(casperDir, "config.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, ok, err := LoadConfig(dir)
+	_, ok, err := awslive.LoadConfig(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,7 +58,7 @@ cloud:
 	if err := os.WriteFile(filepath.Join(casperDir, "config.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, ok, err := LoadConfig(dir)
+	cfg, ok, err := awslive.LoadConfig(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -85,7 +87,7 @@ cloud:
 	if err := os.WriteFile(filepath.Join(casperDir, "config.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, ok, err := LoadConfig(dir)
+	cfg, ok, err := awslive.LoadConfig(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,7 +108,7 @@ func TestLoadConfig_ParseError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(casperDir, "config.yaml"), []byte(":\tinvalid:\tyaml\t{{{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := LoadConfig(dir)
+	_, _, err := awslive.LoadConfig(dir)
 	if err == nil {
 		t.Fatal("expected parse error for invalid YAML")
 	}

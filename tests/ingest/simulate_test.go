@@ -1,14 +1,15 @@
-package ingest
+package ingest_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/workflow"
 )
 
-// testSnapshot returns a small synthetic graph used across all simulate tests.
 func testSnapshot() graph.GraphSnapshot {
 	return graph.GraphSnapshot{
 		Resources: []graph.Resource{
@@ -48,20 +49,18 @@ func testSnapshot() graph.GraphSnapshot {
 			},
 		},
 		Dependencies: []graph.Dependency{
-			{FromResource: "r3", ToResource: "r2", Kind: "reference"}, // sg → vpc
+			{FromResource: "r3", ToResource: "r2", Kind: "reference"},
 		},
 	}
 }
 
-func noQuerier() graph.Querier { return graph.NewMemStore(graph.GraphSnapshot{}) }
-func noPolicies() []policy.Policy { return nil }
+func noQuerier() graph.Querier             { return graph.NewMemStore(graph.GraphSnapshot{}) }
+func noPolicies() []policy.Policy          { return nil }
 func noWorkflowRules() []workflow.WorkflowRule { return nil }
-
-// --- Create ---
 
 func TestSimulateImpact_Create(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/orders"
   retention_in_days = 30
@@ -85,7 +84,7 @@ resource "aws_cloudwatch_log_group" "ecs" {
 
 func TestSimulateImpact_CreateReversibilityOperation(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_cloudwatch_log_group" "ecs" {
   name = "/ecs/orders"
 }`)
@@ -109,12 +108,9 @@ resource "aws_cloudwatch_log_group" "ecs" {
 	}
 }
 
-// --- Modify ---
-
 func TestSimulateImpact_Modify(t *testing.T) {
 	snapshot := testSnapshot()
-	// Change instance_class on an existing resource
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_db_instance" "orders" {
   engine         = "postgres"
   instance_class = "db.t3.large"
@@ -133,7 +129,6 @@ resource "aws_db_instance" "orders" {
 	if _, ok := diff.Changed["instance_class"]; !ok {
 		t.Error("expected instance_class in Changed")
 	}
-	// HCL parser stores string values with surrounding quotes preserved
 	before := diff.Changed["instance_class"].Before
 	after := diff.Changed["instance_class"].After
 	if before != "db.t3.medium" && before != `"db.t3.medium"` {
@@ -146,7 +141,7 @@ resource "aws_db_instance" "orders" {
 
 func TestSimulateImpact_ModifyReversibilityContext(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_db_instance" "orders" {
   engine         = "postgres"
   instance_class = "db.t3.large"
@@ -174,12 +169,9 @@ resource "aws_db_instance" "orders" {
 	}
 }
 
-// --- Blast radius ---
-
 func TestSimulateImpact_BlastRadius_Downstream(t *testing.T) {
 	snapshot := testSnapshot()
-	// Modifying vpc.main — sg.app depends on it so should be in blast radius
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_vpc" "main" {
   cidr_block = "10.1.0.0/16"
 }`)
@@ -199,8 +191,7 @@ resource "aws_vpc" "main" {
 
 func TestSimulateImpact_BlastRadius_NewResourceUpstream(t *testing.T) {
 	snapshot := testSnapshot()
-	// New SG that references the existing vpc — vpc should appear in blast radius
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_security_group" "new_sg" {
   vpc_id      = aws_vpc.main.id
   description = "new sg"
@@ -219,12 +210,9 @@ resource "aws_security_group" "new_sg" {
 	}
 }
 
-// --- Warnings ---
-
 func TestSimulateImpact_BrokenReference(t *testing.T) {
 	snapshot := testSnapshot()
-	// Reference to nonexistent resource
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_security_group" "orphan" {
   vpc_id      = aws_vpc.nonexistent.id
   description = "orphaned"
@@ -239,8 +227,7 @@ resource "aws_security_group" "orphan" {
 
 func TestSimulateImpact_NoWarnForValidRef(t *testing.T) {
 	snapshot := testSnapshot()
-	// Reference to existing resource — should not warn
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_security_group" "valid" {
   vpc_id      = aws_vpc.main.id
   description = "valid reference"
@@ -249,17 +236,15 @@ resource "aws_security_group" "valid" {
 		t.Fatal(err)
 	}
 	for _, w := range result.Warnings {
-		if contains(w, "aws_vpc.main") {
+		if strings.Contains(w, "aws_vpc.main") {
 			t.Errorf("unexpected warning for valid reference: %s", w)
 		}
 	}
 }
 
-// --- Lifecycle flags ---
-
 func TestSimulateImpact_LifecycleFlags_PreventDestroy(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_db_instance" "orders" {
   engine         = "postgres"
   instance_class = "db.t3.medium"
@@ -286,7 +271,7 @@ resource "aws_db_instance" "orders" {
 
 func TestSimulateImpact_LifecycleFlags_CreateBeforeDestroy(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), noPolicies(), noWorkflowRules(), `
 resource "aws_db_instance" "orders" {
   engine         = "postgres"
   instance_class = "db.t3.medium"
@@ -308,8 +293,6 @@ resource "aws_db_instance" "orders" {
 	t.Error("aws_db_instance.orders not found in reversibility context")
 }
 
-// --- Policy violations ---
-
 func TestSimulateImpact_PolicyViolation(t *testing.T) {
 	snapshot := testSnapshot()
 	policies := []policy.Policy{{
@@ -319,8 +302,7 @@ func TestSimulateImpact_PolicyViolation(t *testing.T) {
 		Message:  "must have deletion_protection",
 	}}
 
-	// Propose a new RDS without deletion_protection
-	result, err := SimulateImpact(snapshot, noQuerier(), policies, noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), policies, noWorkflowRules(), `
 resource "aws_db_instance" "new_db" {
   engine         = "postgres"
   instance_class = "db.t3.small"
@@ -349,8 +331,7 @@ func TestSimulateImpact_PolicyPass(t *testing.T) {
 		Message:  "must have deletion_protection",
 	}}
 
-	// Propose a new RDS with deletion_protection = true
-	result, err := SimulateImpact(snapshot, noQuerier(), policies, noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), policies, noWorkflowRules(), `
 resource "aws_db_instance" "new_db" {
   engine              = "postgres"
   instance_class      = "db.t3.small"
@@ -366,7 +347,7 @@ resource "aws_db_instance" "new_db" {
 
 func TestSimulateImpact_NoPolicies(t *testing.T) {
 	snapshot := testSnapshot()
-	result, err := SimulateImpact(snapshot, noQuerier(), nil, noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), nil, noWorkflowRules(), `
 resource "aws_db_instance" "new_db" {
   engine = "postgres"
 }`)
@@ -378,10 +359,8 @@ resource "aws_db_instance" "new_db" {
 	}
 }
 
-// --- Error cases ---
-
 func TestSimulateImpact_NoResourceBlocks(t *testing.T) {
-	_, err := SimulateImpact(testSnapshot(), noQuerier(), noPolicies(), noWorkflowRules(), `
+	_, err := ingest.SimulateImpact(testSnapshot(), noQuerier(), noPolicies(), noWorkflowRules(), `
 variable "region" {
   default = "us-east-1"
 }`)
@@ -391,13 +370,11 @@ variable "region" {
 }
 
 func TestSimulateImpact_InvalidHCL(t *testing.T) {
-	_, err := SimulateImpact(testSnapshot(), noQuerier(), noPolicies(), noWorkflowRules(), `this is not valid hcl {{{`)
+	_, err := ingest.SimulateImpact(testSnapshot(), noQuerier(), noPolicies(), noWorkflowRules(), `this is not valid hcl {{{`)
 	if err == nil {
 		t.Error("expected error for invalid HCL")
 	}
 }
-
-// --- extractResourceRefs unit tests ---
 
 func TestExtractResourceRefs(t *testing.T) {
 	tests := []struct {
@@ -405,41 +382,17 @@ func TestExtractResourceRefs(t *testing.T) {
 		expr     string
 		wantRefs []string
 	}{
-		{
-			name:     "simple reference",
-			expr:     "aws_vpc.main.id",
-			wantRefs: []string{"aws_vpc.main"},
-		},
-		{
-			name:     "skips var prefix",
-			expr:     "var.region",
-			wantRefs: []string{},
-		},
-		{
-			name:     "skips local prefix",
-			expr:     "local.subnet_ids",
-			wantRefs: []string{},
-		},
-		{
-			name:     "skips data prefix",
-			expr:     "data.aws_ami.ubuntu.id",
-			wantRefs: []string{},
-		},
-		{
-			name:     "multiple refs in string",
-			expr:     "aws_vpc.main.id aws_subnet.private.id",
-			wantRefs: []string{"aws_vpc.main", "aws_subnet.private"},
-		},
-		{
-			name:     "no ref in plain string",
-			expr:     "us-east-1",
-			wantRefs: []string{},
-		},
+		{"simple reference", "aws_vpc.main.id", []string{"aws_vpc.main"}},
+		{"skips var prefix", "var.region", []string{}},
+		{"skips local prefix", "local.subnet_ids", []string{}},
+		{"skips data prefix", "data.aws_ami.ubuntu.id", []string{}},
+		{"multiple refs in string", "aws_vpc.main.id aws_subnet.private.id", []string{"aws_vpc.main", "aws_subnet.private"}},
+		{"no ref in plain string", "us-east-1", []string{}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractResourceRefs(tt.expr)
+			got := ingest.ExtractResourceRefs(tt.expr)
 			if len(got) != len(tt.wantRefs) {
 				t.Errorf("got %v, want %v", got, tt.wantRefs)
 				return
@@ -457,8 +410,6 @@ func TestExtractResourceRefs(t *testing.T) {
 	}
 }
 
-// --- diffArguments unit tests ---
-
 func TestDiffArguments(t *testing.T) {
 	cur := graph.Resource{
 		Attributes: map[string]any{
@@ -472,15 +423,14 @@ func TestDiffArguments(t *testing.T) {
 	prop := graph.Resource{
 		Attributes: map[string]any{
 			"arguments": map[string]string{
-				"engine":         "postgres",         // unchanged
-				"instance_class": "db.t3.large",      // changed
-				"new_arg":        "new_value",         // added
-				// old_arg removed
+				"engine":         "postgres",
+				"instance_class": "db.t3.large",
+				"new_arg":        "new_value",
 			},
 		},
 	}
 
-	diff := diffArguments(cur, prop)
+	diff := ingest.DiffArguments(cur, prop)
 	if diff == nil {
 		t.Fatal("expected non-nil diff")
 	}
@@ -516,23 +466,8 @@ func TestDiffArguments_NoChange(t *testing.T) {
 			"arguments": map[string]string{"engine": "postgres"},
 		},
 	}
-	diff := diffArguments(r, r)
+	diff := ingest.DiffArguments(r, r)
 	if diff != nil {
 		t.Error("expected nil diff for identical resources")
 	}
 }
-
-// helpers
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-			return false
-		}())
-}
-

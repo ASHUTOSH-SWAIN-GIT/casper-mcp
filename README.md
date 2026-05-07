@@ -7,7 +7,7 @@ An MCP server that gives AI agents a live, queryable view of your Terraform infr
 - **Find resources** — search by name, type, tag, or attribute across all `.tf` and `.tfstate` files
 - **Simulate changes** — parse proposed HCL and get blast radius, broken references, and policy violations before applying
 - **Detect drift** — compare Terraform state against live AWS via read-only Describe APIs
-- **Enforce policies** — define rules in `.casper/policies.yaml` (must_equal, min_value, required, must_not_equal)
+- **Enforce policies** — define rules in `.casper/policies.yaml` (`must_equal`, `min_value`, `required`, `must_not_equal`)
 - **Load any repo** — point at a GitHub URL and swap the graph on the fly, no restart needed
 
 ## Install
@@ -37,48 +37,37 @@ go install github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/cmd/casper-mcp@latest
 ## Quick start
 
 ```bash
-# Install and set up the /casper slash command for Claude Code
 npm install -g casper-mcp
 casper-mcp init
 ```
 
-Then restart Claude Code if it was already running and run `/casper` to query your infrastructure.
+Restart Claude Code and run `/casper` to query your infrastructure.
 
 ## Commands
 
 ```bash
-# Start the MCP server against your infra repo (stdio mode for Claude Desktop/Code)
+# Wire up Casper for the current project (.mcp.json + /casper slash command)
+casper-mcp init
+casper-mcp init --global         # available in every Claude Code project
+
+# Run the MCP server against a Terraform directory (stdio)
 casper-mcp serve --dir /path/to/your/terraform
 
-# HTTP mode for custom clients
-casper-mcp serve --dir /path/to/your/terraform --http :8080
+# Export an interactive HTML graph
+casper-mcp export --dir /path/to/your/terraform --output graph.html
 ```
 
 ## Connect to Claude
 
 ### Claude Code
 
-Recommended project setup:
-
 ```bash
 casper-mcp init
 ```
 
-This writes `.mcp.json` in the current project and `.claude/commands/casper.md` for the `/casper` slash command.
+Writes `.mcp.json` and `.claude/commands/casper.md` in the current project.
 
-To add Casper across all Claude Code projects:
-
-```bash
-casper-mcp init --global
-```
-
-Or add it manually with Claude Code's MCP CLI:
-
-```bash
-claude mcp add-json casper '{"type":"stdio","command":"npx","args":["-y","casper-mcp","serve","--dir","."]}' --scope user
-```
-
-To commit a shared project config manually, add `.mcp.json` at the project root:
+For a manual project config, drop this in `.mcp.json` at the repo root:
 
 ```json
 {
@@ -91,17 +80,10 @@ To commit a shared project config manually, add `.mcp.json` at the project root:
 }
 ```
 
-Or for HTTP mode (if the server is already running):
+Or via the Claude Code CLI:
 
-```json
-{
-  "mcpServers": {
-    "casper": {
-      "type": "http",
-      "url": "http://localhost:8080/mcp"
-    }
-  }
-}
+```bash
+claude mcp add-json casper '{"type":"stdio","command":"npx","args":["-y","casper-mcp","serve","--dir","."]}' --scope user
 ```
 
 ### Claude Desktop
@@ -133,6 +115,23 @@ Add to `.cursor/mcp.json`:
   }
 }
 ```
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_context` | Combined lookup — resources, examples, modules, conventions in one call |
+| `find_resource` | Search by name, type, tag, or attribute |
+| `get_dependencies` | Upstream + downstream dependency graph for a resource |
+| `find_similar` | Find similar resources as HCL examples |
+| `get_module_for` | Find reusable modules matching an intent |
+| `get_conventions` | How a resource type is configured across the codebase |
+| `simulate_impact` | Parse proposed HCL → blast radius, policy violations, reversibility context |
+| `describe_live_state` | Compare Terraform state vs live AWS — detect drift |
+| `load_repo` | Clone a GitHub repo and reload the graph without restarting |
+| `dump_graph` | Full graph snapshot — all resources, edges, and policy violations |
+
+See [docs/TOOLS.md](docs/TOOLS.md) for full parameter and response documentation.
 
 ## AWS live state (optional)
 
@@ -183,30 +182,33 @@ workflow_rules:
 
 Policy violations are surfaced in `simulate_impact` and `dump_graph` responses. Workflow decisions are advisory — the agent reads them and follows them, but no hard enforcement occurs. Decisions: `allow`, `require_approval`, `require_security_review`, `block`.
 
-## Tools
+## Repository layout
 
-| Tool | Description |
-|------|-------------|
-| `get_context` | Combined lookup — resources, examples, modules, conventions in one call |
-| `find_resource` | Search by name, type, tag, or attribute |
-| `get_dependencies` | Upstream + downstream dependency graph for a resource |
-| `find_similar` | Find similar resources as HCL examples |
-| `get_module_for` | Find reusable modules matching an intent |
-| `get_conventions` | How a resource type is configured across the codebase |
-| `simulate_impact` | Parse proposed HCL → blast radius, policy violations, reversibility context |
-| `describe_live_state` | Compare Terraform state vs live AWS — detect drift |
-| `load_repo` | Clone a GitHub repo and reload the graph without restarting |
-| `dump_graph` | Full graph snapshot — all resources, edges, and policy violations |
-
-See [docs/TOOLS.md](docs/TOOLS.md) for full parameter and response documentation.
-
-## Export graph to HTML
-
-```bash
-casper-mcp export --dir /path/to/your/terraform --output graph.html
+```
+casper-mcp/
+├── cmd/casper-mcp/        CLI entry point
+├── internal/
+│   ├── mcp/               MCP server + tool definitions
+│   ├── graph/             In-memory + Postgres graph stores
+│   ├── ingest/            Terraform .tf and .tfstate parsers
+│   │   ├── terraformcode/
+│   │   └── terraformstate/
+│   ├── awslive/           Read-only AWS Describe + drift detection
+│   ├── policy/            Policy rule engine
+│   ├── workflow/          Workflow routing rules
+│   ├── ui/                Static HTML graph exporter
+│   ├── config/            Config loader
+│   └── migrations/        Postgres schema migrations
+├── migrations/            SQL migration files
+├── tests/                 All Go tests (mirrors internal/ package layout)
+├── docs/                  TOOLS.md, prd.md, DEVELOPMENT.md, test-repos.md
+├── npm/                   npm wrapper that downloads the right binary
+└── fixtures/              Sample Terraform state for tests
 ```
 
-Opens a static interactive graph in your browser — no server needed.
+## Development
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for running Casper locally against a Postgres-backed graph (used for the optional UI mode).
 
 ## License
 

@@ -260,7 +260,7 @@ func (s *Store) FindSimilar(ctx context.Context, description string, limit int) 
 		limit = 10
 	}
 
-	tokens := tokenizeQuery(description)
+	tokens := TokenizeQuery(description)
 	if len(tokens) == 0 {
 		return nil, nil
 	}
@@ -292,7 +292,7 @@ func (s *Store) FindSimilar(ctx context.Context, description string, limit int) 
 		if err != nil {
 			return nil, err
 		}
-		score := similarityScore(resource, description, tokens)
+		score := SimilarityScore(resource, description, tokens)
 		if score == 0 {
 			continue
 		}
@@ -494,7 +494,7 @@ func scanResource(scanner resourceScanner) (Resource, error) {
 	return resource, nil
 }
 
-func tokenizeQuery(query string) []string {
+func TokenizeQuery(query string) []string {
 	parts := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
@@ -522,7 +522,7 @@ func ilikePatterns(tokens []string) []string {
 	return patterns
 }
 
-func similarityScore(resource Resource, query string, tokens []string) int {
+func SimilarityScore(resource Resource, query string, tokens []string) int {
 	lowerQuery := strings.ToLower(strings.TrimSpace(query))
 	lowerIdentifier := strings.ToLower(resource.Identifier)
 	lowerType := strings.ToLower(resource.Type)

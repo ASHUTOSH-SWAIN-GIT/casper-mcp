@@ -135,7 +135,7 @@ func (m *MemStore) FindConventions(_ context.Context, resourceType string, limit
 }
 
 func (m *MemStore) FindSimilar(_ context.Context, description string, limit int) ([]Resource, error) {
-	tokens := expandTokens(tokenizeQuery(description))
+	tokens := expandTokens(TokenizeQuery(description))
 	if len(tokens) == 0 {
 		return nil, nil
 	}

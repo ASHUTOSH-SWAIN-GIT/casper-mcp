@@ -31,3 +31,15 @@ jobs:
         with:
           version: v2.11.4
           args: --timeout=3m
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build e2e image
+        run: docker build -t casper-e2e -f tests/e2e/Dockerfile .
+
+      - name: Run e2e
+        run: docker run --rm casper-e2e

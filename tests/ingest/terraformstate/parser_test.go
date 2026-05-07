@@ -1,9 +1,15 @@
-package terraformstate
+package terraformstate_test
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest/terraformstate"
+)
 
 func TestParseFile(t *testing.T) {
-	result, err := ParseFile("testdata/terraform.tfstate")
+	path := filepath.Join("..", "..", "..", "internal", "ingest", "terraformstate", "testdata", "terraform.tfstate")
+	result, err := terraformstate.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile() error = %v", err)
 	}

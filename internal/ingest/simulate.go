@@ -73,7 +73,7 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 				Arguments:  args,
 			})
 		} else {
-			diff := diffArguments(cur, prop)
+			diff := DiffArguments(cur, prop)
 			if diff != nil {
 				diff.Identifier = prop.Identifier
 				diff.Type = prop.Type
@@ -138,7 +138,7 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 	for _, prop := range proposed {
 		args, _ := prop.Attributes["arguments"].(map[string]string)
 		for argKey, expr := range args {
-			for _, ref := range extractResourceRefs(expr) {
+			for _, ref := range ExtractResourceRefs(expr) {
 				if _, ok := currentByIdent[ref]; !ok {
 					warnings = append(warnings, fmt.Sprintf(
 						"%s: argument %q references %q which is not in the current graph",
@@ -275,7 +275,7 @@ func buildReversibilityContext(
 			curArgs, _ := cur.Attributes["arguments"].(map[string]string)
 			rc.CurrentArgs = curArgs
 
-			diff := diffArguments(cur, prop)
+			diff := DiffArguments(cur, prop)
 			if diff != nil {
 				rc.ChangedArgs = diff.Changed
 				rc.AddedArgs = diff.Added
@@ -297,7 +297,7 @@ func buildReversibilityContext(
 		// DependsOn: what this proposed resource references
 		seenRef := map[string]bool{}
 		for _, expr := range propArgs {
-			for _, ref := range extractResourceRefs(expr) {
+			for _, ref := range ExtractResourceRefs(expr) {
 				if !seenRef[ref] {
 					seenRef[ref] = true
 					rc.DependsOn = append(rc.DependsOn, ref)
@@ -399,9 +399,9 @@ func extractLifecycleFlags(body *hclsyntax.Body, src []byte, resourceType, resou
 	return graph.LifecycleFlags{}
 }
 
-// extractResourceRefs pulls "type.name" references out of an HCL expression string.
+// ExtractResourceRefs pulls "type.name" references out of an HCL expression string.
 // It looks for tokens matching the pattern word.word that appear in resource references.
-func extractResourceRefs(expr string) []string {
+func ExtractResourceRefs(expr string) []string {
 	var refs []string
 	// Split on common delimiters and look for word.word patterns
 	parts := strings.FieldsFunc(expr, func(r rune) bool {
@@ -435,7 +435,7 @@ func isIdentifier(s string) bool {
 	return true
 }
 
-func diffArguments(cur, prop graph.Resource) *graph.ResourceDiff {
+func DiffArguments(cur, prop graph.Resource) *graph.ResourceDiff {
 	curArgs, _ := cur.Attributes["arguments"].(map[string]string)
 	propArgs, _ := prop.Attributes["arguments"].(map[string]string)
 

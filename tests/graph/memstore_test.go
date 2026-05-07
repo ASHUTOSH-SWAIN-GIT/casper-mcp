@@ -1,13 +1,14 @@
-package graph
+package graph_test
 
 import (
 	"context"
 	"testing"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 )
 
-// testSnapshot builds a small synthetic GraphSnapshot for all MemStore tests.
-func testSnapshot() GraphSnapshot {
-	resources := []Resource{
+func memStoreSnapshot() graph.GraphSnapshot {
+	resources := []graph.Resource{
 		{
 			ID:         "r1",
 			Type:       "aws_db_instance",
@@ -62,16 +63,16 @@ func testSnapshot() GraphSnapshot {
 		},
 	}
 
-	deps := []Dependency{
-		{FromResource: "r4", ToResource: "r3", Kind: "reference"},  // sg depends on vpc
-		{FromResource: "r2", ToResource: "r1", Kind: "reference"},  // replica depends on primary
+	deps := []graph.Dependency{
+		{FromResource: "r4", ToResource: "r3", Kind: "reference"},
+		{FromResource: "r2", ToResource: "r1", Kind: "reference"},
 	}
 
-	return GraphSnapshot{Resources: resources, Dependencies: deps}
+	return graph.GraphSnapshot{Resources: resources, Dependencies: deps}
 }
 
 func TestFindResources_ExactIdentifier(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindResources(ctx, "aws_db_instance.orders", 10)
@@ -87,7 +88,7 @@ func TestFindResources_ExactIdentifier(t *testing.T) {
 }
 
 func TestFindResources_TypeMatch(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindResources(ctx, "aws_db_instance", 10)
@@ -100,7 +101,7 @@ func TestFindResources_TypeMatch(t *testing.T) {
 }
 
 func TestFindResources_SubstringMatch(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindResources(ctx, "orders", 10)
@@ -113,7 +114,7 @@ func TestFindResources_SubstringMatch(t *testing.T) {
 }
 
 func TestFindResources_NoMatch(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindResources(ctx, "nonexistent_resource_xyz", 10)
@@ -126,7 +127,7 @@ func TestFindResources_NoMatch(t *testing.T) {
 }
 
 func TestFindResources_LimitRespected(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindResources(ctx, "aws", 2)
@@ -139,10 +140,9 @@ func TestFindResources_LimitRespected(t *testing.T) {
 }
 
 func TestGetDependencies_Downstream(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
-	// r3 (vpc) is referenced by r4 (sg) — r4 is a dependent of r3
 	deps, err := store.GetDependencies(ctx, "r3")
 	if err != nil {
 		t.Fatal(err)
@@ -160,10 +160,9 @@ func TestGetDependencies_Downstream(t *testing.T) {
 }
 
 func TestGetDependencies_Upstream(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
-	// r4 (sg) depends on r3 (vpc)
 	deps, err := store.GetDependencies(ctx, "r4")
 	if err != nil {
 		t.Fatal(err)
@@ -181,10 +180,10 @@ func TestGetDependencies_Upstream(t *testing.T) {
 }
 
 func TestGetDependencies_NoDeps(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
-	deps, err := store.GetDependencies(ctx, "r5") // lambda has no edges
+	deps, err := store.GetDependencies(ctx, "r5")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +193,7 @@ func TestGetDependencies_NoDeps(t *testing.T) {
 }
 
 func TestFindModules_Match(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindModules(ctx, "rds", 10)
@@ -212,7 +211,7 @@ func TestFindModules_Match(t *testing.T) {
 }
 
 func TestFindConventions_ExactType(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindConventions(ctx, "aws_db_instance", 10)
@@ -230,7 +229,7 @@ func TestFindConventions_ExactType(t *testing.T) {
 }
 
 func TestFindSimilar_TypeMatch(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindSimilar(ctx, "aws_db_instance", 10)
@@ -243,10 +242,9 @@ func TestFindSimilar_TypeMatch(t *testing.T) {
 }
 
 func TestFindSimilar_SynonymExpansion(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
-	// "rds" should expand to include aws_db_instance synonyms
 	results, err := store.FindSimilar(ctx, "rds", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -262,10 +260,9 @@ func TestFindSimilar_SynonymExpansion(t *testing.T) {
 }
 
 func TestFindSimilar_ReplicaByArgKey(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
-	// "replica" should match resources with replicate_source_db argument
 	results, err := store.FindSimilar(ctx, "replica", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +279,7 @@ func TestFindSimilar_ReplicaByArgKey(t *testing.T) {
 }
 
 func TestFindSimilar_NoMatch(t *testing.T) {
-	store := NewMemStore(testSnapshot())
+	store := graph.NewMemStore(memStoreSnapshot())
 	ctx := context.Background()
 
 	results, err := store.FindSimilar(ctx, "kubernetes_pod", 10)

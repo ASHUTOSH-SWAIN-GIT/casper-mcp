@@ -1,9 +1,13 @@
-package graph
+package graph_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
+)
 
 func TestTokenizeQuery(t *testing.T) {
-	tokens := tokenizeQuery("read replica for orders-prod")
+	tokens := graph.TokenizeQuery("read replica for orders-prod")
 	if len(tokens) != 5 {
 		t.Fatalf("expected 5 tokens, got %d", len(tokens))
 	}
@@ -14,9 +18,9 @@ func TestTokenizeQuery(t *testing.T) {
 
 func TestSimilarityScore(t *testing.T) {
 	query := "orders-prod postgres"
-	tokens := tokenizeQuery(query)
+	tokens := graph.TokenizeQuery(query)
 
-	db := Resource{
+	db := graph.Resource{
 		Type:       "aws_db_instance",
 		Identifier: "aws_db_instance.orders_prod",
 		Attributes: map[string]any{
@@ -30,7 +34,7 @@ func TestSimilarityScore(t *testing.T) {
 		},
 	}
 
-	module := Resource{
+	module := graph.Resource{
 		Type:       "terraform_module",
 		Identifier: "modules/postgres",
 		ModulePath: "modules/postgres",
@@ -42,7 +46,7 @@ func TestSimilarityScore(t *testing.T) {
 		},
 	}
 
-	if similarityScore(db, query, tokens) <= similarityScore(module, query, tokens) {
+	if graph.SimilarityScore(db, query, tokens) <= graph.SimilarityScore(module, query, tokens) {
 		t.Fatalf("expected db resource to score above module for query %q", query)
 	}
 }

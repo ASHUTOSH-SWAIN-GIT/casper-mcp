@@ -1,20 +1,20 @@
-package policy
+package policy_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
 )
 
 func intPtr(n int) *int { return &n }
 
-// --- Check() unit tests ---
-
 func TestCheck_MustEqual(t *testing.T) {
-	policies := []Policy{{
+	policies := []policy.Policy{{
 		ID:       "rds-deletion-protection",
 		Resource: "aws_db_instance",
-		Rules:    []Rule{{Arg: "deletion_protection", MustEqual: "true"}},
+		Rules:    []policy.Rule{{Arg: "deletion_protection", MustEqual: "true"}},
 		Message:  "must have deletion_protection",
 	}}
 
@@ -30,7 +30,7 @@ func TestCheck_MustEqual(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := Check(policies, "aws_db_instance", "aws_db_instance.orders", tt.args, nil)
+			v := policy.Check(policies, "aws_db_instance", "aws_db_instance.orders", tt.args, nil)
 			if (len(v) > 0) != tt.wantViolate {
 				t.Errorf("wantViolate=%v got %d violations", tt.wantViolate, len(v))
 			}
@@ -39,10 +39,10 @@ func TestCheck_MustEqual(t *testing.T) {
 }
 
 func TestCheck_MustNotEqual(t *testing.T) {
-	policies := []Policy{{
+	policies := []policy.Policy{{
 		ID:       "no-public-s3",
 		Resource: "aws_s3_bucket",
-		Rules:    []Rule{{Arg: "acl", MustNotEqual: "public-read"}},
+		Rules:    []policy.Rule{{Arg: "acl", MustNotEqual: "public-read"}},
 		Message:  "no public buckets",
 	}}
 
@@ -58,7 +58,7 @@ func TestCheck_MustNotEqual(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := Check(policies, "aws_s3_bucket", "aws_s3_bucket.data", tt.args, nil)
+			v := policy.Check(policies, "aws_s3_bucket", "aws_s3_bucket.data", tt.args, nil)
 			if (len(v) > 0) != tt.wantViolate {
 				t.Errorf("wantViolate=%v got %d violations", tt.wantViolate, len(v))
 			}
@@ -67,10 +67,10 @@ func TestCheck_MustNotEqual(t *testing.T) {
 }
 
 func TestCheck_Required(t *testing.T) {
-	policies := []Policy{{
+	policies := []policy.Policy{{
 		ID:       "sg-description",
 		Resource: "aws_security_group",
-		Rules:    []Rule{{Arg: "description", Required: true}},
+		Rules:    []policy.Rule{{Arg: "description", Required: true}},
 		Message:  "security groups need description",
 	}}
 
@@ -86,7 +86,7 @@ func TestCheck_Required(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := Check(policies, "aws_security_group", "aws_security_group.app", tt.args, nil)
+			v := policy.Check(policies, "aws_security_group", "aws_security_group.app", tt.args, nil)
 			if (len(v) > 0) != tt.wantViolate {
 				t.Errorf("wantViolate=%v got %d violations", tt.wantViolate, len(v))
 			}
@@ -95,10 +95,10 @@ func TestCheck_Required(t *testing.T) {
 }
 
 func TestCheck_MinValue(t *testing.T) {
-	policies := []Policy{{
+	policies := []policy.Policy{{
 		ID:       "rds-backup",
 		Resource: "aws_db_instance",
-		Rules:    []Rule{{Arg: "backup_retention_period", MinValue: intPtr(7)}},
+		Rules:    []policy.Rule{{Arg: "backup_retention_period", MinValue: intPtr(7)}},
 		Message:  "need 7 days retention",
 	}}
 
@@ -117,7 +117,7 @@ func TestCheck_MinValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := Check(policies, "aws_db_instance", "aws_db_instance.orders", tt.args, nil)
+			v := policy.Check(policies, "aws_db_instance", "aws_db_instance.orders", tt.args, nil)
 			if (len(v) > 0) != tt.wantViolate {
 				t.Errorf("wantViolate=%v got %d violations", tt.wantViolate, len(v))
 			}
@@ -126,16 +126,15 @@ func TestCheck_MinValue(t *testing.T) {
 }
 
 func TestCheck_WildcardResource(t *testing.T) {
-	policies := []Policy{{
+	policies := []policy.Policy{{
 		ID:       "require-owner-tag",
 		Resource: "*",
-		Rules:    []Rule{{Arg: "owner", Required: true}},
+		Rules:    []policy.Rule{{Arg: "owner", Required: true}},
 		Message:  "all resources need an owner",
 	}}
 
-	// Should apply to any resource type
 	for _, rtype := range []string{"aws_db_instance", "aws_s3_bucket", "aws_lambda_function"} {
-		v := Check(policies, rtype, rtype+".test", map[string]string{}, nil)
+		v := policy.Check(policies, rtype, rtype+".test", map[string]string{}, nil)
 		if len(v) == 0 {
 			t.Errorf("expected violation for resource type %s", rtype)
 		}
@@ -143,25 +142,24 @@ func TestCheck_WildcardResource(t *testing.T) {
 }
 
 func TestCheck_ResourceTypeMismatch(t *testing.T) {
-	policies := []Policy{{
+	policies := []policy.Policy{{
 		ID:       "rds-only",
 		Resource: "aws_db_instance",
-		Rules:    []Rule{{Arg: "deletion_protection", MustEqual: "true"}},
+		Rules:    []policy.Rule{{Arg: "deletion_protection", MustEqual: "true"}},
 		Message:  "rds policy",
 	}}
 
-	// Should NOT apply to a different resource type
-	v := Check(policies, "aws_s3_bucket", "aws_s3_bucket.data", map[string]string{}, nil)
+	v := policy.Check(policies, "aws_s3_bucket", "aws_s3_bucket.data", map[string]string{}, nil)
 	if len(v) > 0 {
 		t.Errorf("policy should not apply to aws_s3_bucket, got %d violations", len(v))
 	}
 }
 
 func TestCheck_MultipleRules_AllMustPass(t *testing.T) {
-	policies := []Policy{{
+	policies := []policy.Policy{{
 		ID:       "rds-full",
 		Resource: "aws_db_instance",
-		Rules: []Rule{
+		Rules: []policy.Rule{
 			{Arg: "deletion_protection", MustEqual: "true"},
 			{Arg: "backup_retention_period", MinValue: intPtr(7)},
 			{Arg: "storage_encrypted", MustEqual: "true"},
@@ -169,22 +167,19 @@ func TestCheck_MultipleRules_AllMustPass(t *testing.T) {
 		Message: "rds requirements",
 	}}
 
-	// All three fail
-	v := Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{}, nil)
+	v := policy.Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{}, nil)
 	if len(v) != 3 {
 		t.Errorf("expected 3 violations, got %d", len(v))
 	}
 
-	// Two fail
-	v = Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{
+	v = policy.Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{
 		"deletion_protection": "true",
 	}, nil)
 	if len(v) != 2 {
 		t.Errorf("expected 2 violations, got %d", len(v))
 	}
 
-	// All pass
-	v = Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{
+	v = policy.Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{
 		"deletion_protection":     "true",
 		"backup_retention_period": "7",
 		"storage_encrypted":       "true",
@@ -195,14 +190,14 @@ func TestCheck_MultipleRules_AllMustPass(t *testing.T) {
 }
 
 func TestCheck_ViolationFields(t *testing.T) {
-	policies := []Policy{{
+	policies := []policy.Policy{{
 		ID:       "test-policy",
 		Resource: "aws_db_instance",
-		Rules:    []Rule{{Arg: "deletion_protection", MustEqual: "true"}},
+		Rules:    []policy.Rule{{Arg: "deletion_protection", MustEqual: "true"}},
 		Message:  "must protect",
 	}}
 
-	v := Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{}, nil)
+	v := policy.Check(policies, "aws_db_instance", "aws_db_instance.orders", map[string]string{}, nil)
 	if len(v) != 1 {
 		t.Fatalf("expected 1 violation, got %d", len(v))
 	}
@@ -223,11 +218,9 @@ func TestCheck_ViolationFields(t *testing.T) {
 	}
 }
 
-// --- Load() unit tests ---
-
 func TestLoad_MissingFile(t *testing.T) {
 	dir := t.TempDir()
-	policies, err := Load(dir)
+	policies, err := policy.Load(dir)
 	if err != nil {
 		t.Errorf("expected no error for missing file, got %v", err)
 	}
@@ -256,7 +249,7 @@ policies:
 		t.Fatal(err)
 	}
 
-	policies, err := Load(dir)
+	policies, err := policy.Load(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -284,7 +277,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(dir)
+	_, err := policy.Load(dir)
 	if err == nil {
 		t.Error("expected error for invalid YAML, got nil")
 	}

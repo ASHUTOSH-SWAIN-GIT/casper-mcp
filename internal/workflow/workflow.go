@@ -101,8 +101,8 @@ func Evaluate(rules []WorkflowRule, resources []ResourceInput) *graph.WorkflowDe
 	seen := map[string]bool{}
 
 	for _, res := range resources {
-		env := detectEnv(res)
-		family := resourceFamily(res.Type)
+		env := DetectEnv(res)
+		family := ResourceFamily(res.Type)
 
 		for _, rule := range rules {
 			if !matchesCondition(rule.When, env, res.Operation, family, res.Type) {
@@ -214,9 +214,9 @@ func defaultSteps(decision string) []string {
 	}
 }
 
-// detectEnv infers the environment from tags, module path, source path, and identifier.
+// DetectEnv infers the environment from tags, module path, source path, and identifier.
 // Strictness order: prod > staging > dev. Fails closed to "prod" if nothing detected.
-func detectEnv(res ResourceInput) string {
+func DetectEnv(res ResourceInput) string {
 	best := ""
 	rank := map[string]int{"dev": 1, "staging": 2, "prod": 3}
 
@@ -287,7 +287,7 @@ var familyMap = map[string]string{
 	"aws_efs_file_system":                  "storage",
 }
 
-func resourceFamily(resourceType string) string {
+func ResourceFamily(resourceType string) string {
 	if f, ok := familyMap[resourceType]; ok {
 		return f
 	}

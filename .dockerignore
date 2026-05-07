@@ -1,0 +1,14 @@
+.git
+.github
+.golangci.yml
+.goreleaser.yaml
+.idea
+.vscode
+casper-mcp
+*.test
+*.out
+docs/
+docker-compose.yml
+node_modules
+npm/node_modules
+README.md
