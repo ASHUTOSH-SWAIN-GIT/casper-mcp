@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -32,46 +33,151 @@ func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, 
 		"casper",
 		"0.1.0",
 		server.WithToolCapabilities(false),
-		server.WithInstructions(`Casper gives you a live, queryable view of this repository's Terraform infrastructure.
+		server.WithInstructions(`Casper gives you a live, queryable view of this repository's Terraform infrastructure. Prefer Casper tools over reading or grepping .tf files — the graph is structured, complete, and stays in sync with disk.
 
 Recommended workflow:
-1. Call get_context first for any infrastructure task — it returns existing resources, similar examples, matching modules, and conventions in one shot.
-2. After drafting Terraform, call simulate_impact before presenting code. The response includes created/modified resources, blast radius, broken-reference warnings, similar real examples, reversibility context, and policy violations.
+1. For broad questions, call get_context — it returns matching resources, similar examples, modules, and conventions in one shot.
+2. For targeted lookups (one resource, all of a type, one provider), call find_resource with type/provider/query filters. NEVER reach for grep/Read on .tf files when find_resource can answer the question.
+3. For "what providers / what's deployed at a high level", call list_providers — much cheaper than dump_graph + parsing.
+4. Use dump_graph only for full audits or visualizations. Don't dump and re-parse.
+5. Before presenting authored Terraform, call simulate_impact — it returns blast radius, broken refs, similar examples, reversibility, and policy violations.
 
-Individual lookup tools (find_resource, find_similar, get_module_for, get_conventions, get_dependencies) are available when you need a targeted follow-up after get_context.`),
+Other tools available: find_similar (HCL examples), get_module_for (reusable modules), get_conventions (codebase patterns), get_dependencies (graph walk), describe_live_state (AWS drift), render_graph (interactive HTML), load_repo (swap repos).`),
 	)
 
 	s.AddTool(
 		mcp.NewTool(
 			"find_resource",
-			mcp.WithDescription("Search for Terraform-managed infrastructure resources by name, type, tag, or attribute. Returns matching resources with their arguments. Use find_similar to get resources as HCL examples."),
+			mcp.WithDescription("Search the graph for Terraform-managed resources. Filter by name substring, resource type (e.g. aws_db_instance), provider (aws, kubernetes, datadog…), tag, or attribute. Returns up to `limit` matches with full arguments and source location.\n\nALWAYS prefer this over running grep/Read on .tf files — it returns structured data, scales to large repos, and stays in sync with the graph. Reach for dump_graph only when you genuinely need every node (audits, full visualizations); for any filtered question, use this tool."),
 			mcp.WithTitleAnnotation("Find Resource"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithDestructiveHintAnnotation(false),
-			mcp.WithString("query", mcp.Required(), mcp.Description("Search query, such as orders-prod or aws_db_instance.")),
+			mcp.WithString("query", mcp.Description("Free-text query matched against name, type, tags, attributes. Optional if you pass type or provider.")),
+			mcp.WithString("type", mcp.Description("Restrict to a Terraform resource type (e.g. aws_db_instance, kubernetes_namespace).")),
+			mcp.WithString("provider", mcp.Description("Restrict to a Terraform provider (aws, kubernetes, datadog, snowflake, etc.).")),
+			mcp.WithNumber("limit", mcp.Description("Max results. Default 25, max 200."), mcp.Min(1), mcp.Max(200), mcp.DefaultNumber(25)),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			query, err := request.RequireString("query")
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			query, _ := request.GetArguments()["query"].(string)
+			typeFilter, _ := request.GetArguments()["type"].(string)
+			providerFilter, _ := request.GetArguments()["provider"].(string)
+			limit := 25
+			if l, ok := request.GetArguments()["limit"].(float64); ok && l > 0 {
+				limit = int(l)
+			}
+			if query == "" && typeFilter == "" && providerFilter == "" {
+				return mcp.NewToolResultError("find_resource requires at least one of: query, type, provider"), nil
 			}
 
-			resources, err := store.FindResources(ctx, query, 10)
+			// Use a generous internal cap so type/provider filters still work
+			// when the free-text query is empty.
+			searchQuery := query
+			if searchQuery == "" {
+				searchQuery = typeFilter
+				if searchQuery == "" {
+					searchQuery = providerFilter
+				}
+			}
+			resources, err := store.FindResources(ctx, searchQuery, 1000)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("find_resource failed: %v — try get_context for a broader search", err)), nil
 			}
-			if len(resources) == 0 {
-				return mcp.NewToolResultText(fmt.Sprintf("No resources found for %q. Try get_context with a broader intent, or find_similar for example resources.", query)), nil
+
+			// Apply structured filters in-process so callers can combine query + type + provider.
+			filtered := resources[:0]
+			for _, r := range resources {
+				if typeFilter != "" && r.Type != typeFilter {
+					continue
+				}
+				if providerFilter != "" && r.Provider != providerFilter {
+					continue
+				}
+				filtered = append(filtered, r)
+			}
+			truncated := false
+			if len(filtered) > limit {
+				filtered = filtered[:limit]
+				truncated = true
 			}
 
-			payload, err := json.MarshalIndent(resources, "", "  ")
+			if len(filtered) == 0 {
+				return mcp.NewToolResultText(fmt.Sprintf("No resources matched (query=%q type=%q provider=%q). Widen filters or try get_context.", query, typeFilter, providerFilter)), nil
+			}
+
+			payload, err := json.MarshalIndent(map[string]any{
+				"matches":   filtered,
+				"truncated": truncated,
+			}, "", "  ")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-
 			return mcp.NewToolResultText(string(payload)), nil
 		},
 	)
+
+	// list_providers: aggregate per-provider counts. Eliminates the need to
+	// grep `versions.tf` files just to answer "what providers does this repo use?".
+	if snapshotter, ok := store.(graph.Snapshotter); ok {
+		s.AddTool(
+			mcp.NewTool(
+				"list_providers",
+				mcp.WithDescription("Return every Terraform provider in use across the repo, with resource counts and the top resource types per provider. Use this instead of grepping versions.tf or required_providers blocks."),
+				mcp.WithTitleAnnotation("List Providers"),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithDestructiveHintAnnotation(false),
+				mcp.WithIdempotentHintAnnotation(true),
+			),
+			func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				snap := snapshotter.Snapshot()
+				type entry struct {
+					Provider     string         `json:"provider"`
+					ResourceCount int           `json:"resource_count"`
+					TopTypes     []map[string]any `json:"top_types"`
+				}
+				perProvider := map[string]map[string]int{}
+				for _, r := range snap.Resources {
+					if r.Provider == "" || r.Type == "terraform_module" || r.Type == "terraform_convention" {
+						continue
+					}
+					if perProvider[r.Provider] == nil {
+						perProvider[r.Provider] = map[string]int{}
+					}
+					perProvider[r.Provider][r.Type]++
+				}
+				out := make([]entry, 0, len(perProvider))
+				for prov, types := range perProvider {
+					typeList := make([]map[string]any, 0, len(types))
+					total := 0
+					for t, c := range types {
+						typeList = append(typeList, map[string]any{"type": t, "count": c})
+						total += c
+					}
+					sort.Slice(typeList, func(i, j int) bool {
+						ci, cj := typeList[i]["count"].(int), typeList[j]["count"].(int)
+						if ci != cj {
+							return ci > cj
+						}
+						return typeList[i]["type"].(string) < typeList[j]["type"].(string)
+					})
+					if len(typeList) > 5 {
+						typeList = typeList[:5]
+					}
+					out = append(out, entry{Provider: prov, ResourceCount: total, TopTypes: typeList})
+				}
+				sort.Slice(out, func(i, j int) bool {
+					if out[i].ResourceCount != out[j].ResourceCount {
+						return out[i].ResourceCount > out[j].ResourceCount
+					}
+					return out[i].Provider < out[j].Provider
+				})
+				payload, _ := json.MarshalIndent(map[string]any{
+					"providers":      out,
+					"provider_count": len(out),
+				}, "", "  ")
+				return mcp.NewToolResultText(string(payload)), nil
+			},
+		)
+	}
 
 	s.AddTool(
 		mcp.NewTool(
@@ -484,7 +590,7 @@ Individual lookup tools (find_resource, find_similar, get_module_for, get_conven
 		s.AddTool(
 			mcp.NewTool(
 				"dump_graph",
-				mcp.WithDescription("Return the complete infrastructure graph: all resources, all dependency edges, resource counts by type, and policy violations on every resource. Use this to bootstrap a client-side graph view or for full-repo analysis. For targeted queries use find_resource or get_context instead."),
+				mcp.WithDescription("Return the COMPLETE infrastructure graph — every resource, every edge, every policy violation. The response is large (often >10k lines); use it only for full-repo audits or when bootstrapping a UI.\n\nDO NOT call this just to filter for one type/provider/name — find_resource is dramatically cheaper and returns the same shape. Don't dump and re-parse with grep/python; pass filters to find_resource instead. Check list_providers if you only need provider counts."),
 				mcp.WithTitleAnnotation("Dump Graph"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -494,13 +600,14 @@ Individual lookup tools (find_resource, find_similar, get_module_for, get_conven
 				snap := snapshotter.Snapshot()
 
 				type ResourceEntry struct {
-					ID         string         `json:"id"`
-					Type       string         `json:"type"`
-					Identifier string         `json:"identifier"`
-					ModulePath string         `json:"module_path,omitempty"`
-					Source     string         `json:"source,omitempty"`
-					Attributes map[string]any `json:"attributes,omitempty"`
-					Tags       map[string]any `json:"tags,omitempty"`
+					ID         string             `json:"id"`
+					Type       string             `json:"type"`
+					Provider   string             `json:"provider,omitempty"`
+					Identifier string             `json:"identifier"`
+					ModulePath string             `json:"module_path,omitempty"`
+					Source     string             `json:"source,omitempty"`
+					Attributes map[string]any     `json:"attributes,omitempty"`
+					Tags       map[string]any     `json:"tags,omitempty"`
 					Violations []policy.Violation `json:"policy_violations,omitempty"`
 				}
 				type DepEntry struct {
@@ -536,6 +643,7 @@ Individual lookup tools (find_resource, find_similar, get_module_for, get_conven
 					resources = append(resources, ResourceEntry{
 						ID:         r.ID,
 						Type:       r.Type,
+						Provider:   r.Provider,
 						Identifier: r.Identifier,
 						ModulePath: r.ModulePath,
 						Source:     r.Source,

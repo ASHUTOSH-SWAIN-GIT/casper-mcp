@@ -147,13 +147,15 @@ func TestE2E_FindResource_ByName(t *testing.T) {
 	c := newClient(t)
 	res := callTool(t, c, "find_resource", map[string]any{"query": "orders_primary"})
 
-	var resources []map[string]any
-	unmarshalJSON(t, res, &resources)
-	if len(resources) == 0 {
+	var payload struct {
+		Matches []map[string]any `json:"matches"`
+	}
+	unmarshalJSON(t, res, &payload)
+	if len(payload.Matches) == 0 {
 		t.Fatal("expected at least one resource matching orders_primary")
 	}
 	var found bool
-	for _, r := range resources {
+	for _, r := range payload.Matches {
 		if r["Identifier"] == "aws_db_instance.orders_primary" {
 			found = true
 		}
@@ -165,20 +167,22 @@ func TestE2E_FindResource_ByName(t *testing.T) {
 
 func TestE2E_FindResource_ByType(t *testing.T) {
 	c := newClient(t)
-	res := callTool(t, c, "find_resource", map[string]any{"query": "aws_db_instance"})
+	res := callTool(t, c, "find_resource", map[string]any{"type": "aws_db_instance"})
 
-	var resources []map[string]any
-	unmarshalJSON(t, res, &resources)
+	var payload struct {
+		Matches []map[string]any `json:"matches"`
+	}
+	unmarshalJSON(t, res, &payload)
 
 	identifiers := map[string]bool{}
-	for _, r := range resources {
+	for _, r := range payload.Matches {
 		if id, ok := r["Identifier"].(string); ok {
 			identifiers[id] = true
 		}
 	}
 	for _, want := range []string{"aws_db_instance.orders_primary", "aws_db_instance.orders_replica"} {
 		if !identifiers[want] {
-			t.Errorf("expected %q in find_resource(aws_db_instance) results, got %v", want, identifiers)
+			t.Errorf("expected %q in find_resource(type=aws_db_instance) results, got %v", want, identifiers)
 		}
 	}
 }
@@ -208,10 +212,12 @@ func TestE2E_GetDependencies_Upstream(t *testing.T) {
 
 	// Look up the SG id first.
 	res := callTool(t, c, "find_resource", map[string]any{"query": "aws_security_group.app"})
-	var resources []map[string]any
-	unmarshalJSON(t, res, &resources)
+	var payload struct {
+		Matches []map[string]any `json:"matches"`
+	}
+	unmarshalJSON(t, res, &payload)
 	var sgID string
-	for _, r := range resources {
+	for _, r := range payload.Matches {
 		if r["Identifier"] == "aws_security_group.app" {
 			sgID, _ = r["ID"].(string)
 		}

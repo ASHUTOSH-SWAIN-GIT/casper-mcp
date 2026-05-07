@@ -38,6 +38,7 @@ type exportNode struct {
 	Title      string `json:"title"`
 	Group      string `json:"group"`
 	Type       string `json:"type"`
+	Provider   string `json:"provider"`
 	Module     string `json:"module"`
 	Identifier string `json:"identifier"`
 }
@@ -83,6 +84,7 @@ func buildExportPayload(snapshot graph.GraphSnapshot) exportPayload {
 			Title:      title,
 			Group:      group,
 			Type:       r.Type,
+			Provider:   r.Provider,
 			Module:     group,
 			Identifier: r.Identifier,
 		})

@@ -108,6 +108,7 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 			ID:         resourceInstanceID(r.Type, r.Name, modulePath),
 			Source:     dir,
 			Type:       r.Type,
+			Provider:   ProviderFromType(r.Type),
 			Identifier: r.Type + "." + r.Name,
 			Attributes: attrs,
 			Tags:       map[string]any{},
@@ -116,8 +117,21 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 		})
 	}
 
+	// Map module call name → resolved absolute target dir, so we can emit
+	// placeholder edges for cross-module references like `module.vpc.subnets`.
+	// scan.go resolves these into real resource→resource edges later.
+	moduleCallTarget := map[string]string{}
+	for _, mc := range module.ModuleCalls {
+		if mc.Source == "" {
+			continue
+		}
+		moduleCallTarget[mc.Name] = resolveModuleSource(dir, mc.Source)
+	}
+
 	// Extract dependency edges: for each resource, scan its attribute values
-	// for references to other resources in this module.
+	// for references to (a) other resources in this module and (b) outputs of
+	// child modules. The (b) edges are emitted as placeholders that scan.go
+	// resolves once every module has been parsed.
 	var deps []graph.Dependency
 	for fromRef, fromID := range knownRef {
 		parts := strings.SplitN(fromRef, ".", 2)
@@ -128,15 +142,16 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 		if !ok {
 			continue
 		}
-		seen := map[string]bool{}
+		seenLocal := map[string]bool{}
+		seenModule := map[string]bool{}
 		for _, expr := range detail.Arguments {
+			// Same-module resource refs.
 			for toRef, toID := range knownRef {
-				if toRef == fromRef || seen[toRef] {
+				if toRef == fromRef || seenLocal[toRef] {
 					continue
 				}
-				// Match "type.name." (attribute access) or "type.name[" (index)
 				if strings.Contains(expr, toRef+".") || strings.Contains(expr, toRef+"[") {
-					seen[toRef] = true
+					seenLocal[toRef] = true
 					deps = append(deps, graph.Dependency{
 						FromResource: fromID,
 						ToResource:   toID,
@@ -145,10 +160,60 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 					})
 				}
 			}
+			// Cross-module refs: `module.<name>.`
+			for callName, targetDir := range moduleCallTarget {
+				if seenModule[callName] {
+					continue
+				}
+				needle := "module." + callName + "."
+				if strings.Contains(expr, needle) {
+					seenModule[callName] = true
+					deps = append(deps, graph.Dependency{
+						FromResource: fromID,
+						ToResource:   ModuleEdgePlaceholder + targetDir,
+						Kind:         "module_use",
+						Source:       dir,
+					})
+				}
+			}
 		}
 	}
 
 	return resources, deps, nil
+}
+
+// ModuleEdgePlaceholder marks dependencies whose ToResource is a module
+// directory rather than a real resource ID. scan.go expands each placeholder
+// edge into N edges (one per resource in the target module) once every
+// module has been parsed.
+const ModuleEdgePlaceholder = "MODULE_DIR:"
+
+// resolveModuleSource turns a relative module call source ("../vpc",
+// "./modules/foo") into a cleaned absolute path. Registry sources
+// ("cloudposse/rds/aws") and remote sources ("git::…") return empty —
+// they're resolved later via .terraform/modules/modules.json.
+func resolveModuleSource(callerDir, source string) string {
+	if source == "" {
+		return ""
+	}
+	if strings.ContainsAny(source, ":@") || (!strings.HasPrefix(source, ".") && !strings.HasPrefix(source, "/")) {
+		// registry / remote — caller handles via modules.json
+		return ""
+	}
+	if filepath.IsAbs(source) {
+		return filepath.Clean(source)
+	}
+	return filepath.Clean(filepath.Join(callerDir, source))
+}
+
+// ProviderFromType derives the Terraform provider name from a resource type.
+// "aws_vpc" → "aws", "kubernetes_namespace" → "kubernetes", "datadog_monitor" → "datadog".
+// Falls back to the full type if no underscore is present.
+func ProviderFromType(resourceType string) string {
+	if i := strings.Index(resourceType, "_"); i > 0 {
+		return resourceType[:i]
+	}
+	return resourceType
 }
 
 func resourceInstanceID(resourceType, name, modulePath string) string {

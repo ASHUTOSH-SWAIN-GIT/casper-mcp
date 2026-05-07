@@ -6,6 +6,7 @@ type Resource struct {
 	ID         string
 	Source     string
 	Type       string
+	Provider   string // e.g. "aws", "kubernetes", "datadog" — derived from Type's prefix.
 	Identifier string
 	Attributes map[string]any
 	Tags       map[string]any

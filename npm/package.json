@@ -1,8 +1,14 @@
 {
   "name": "casper-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server that gives AI agents a live, queryable view of your Terraform infrastructure",
-  "keywords": ["mcp", "terraform", "infrastructure", "ai", "claude"],
+  "keywords": [
+    "mcp",
+    "terraform",
+    "infrastructure",
+    "ai",
+    "claude"
+  ],
   "homepage": "https://github.com/ASHUTOSH-SWAIN-GIT/casper-mcp",
   "repository": {
     "type": "git",

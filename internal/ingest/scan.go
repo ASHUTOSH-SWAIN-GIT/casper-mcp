@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
@@ -25,6 +26,12 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 		result, err := terraformstate.ParseFile(f)
 		if err != nil {
 			continue
+		}
+		// Backfill Provider on state-derived resources too.
+		for i := range result.Resources {
+			if result.Resources[i].Provider == "" {
+				result.Resources[i].Provider = terraformcode.ProviderFromType(result.Resources[i].Type)
+			}
 		}
 		snapshot.Resources = append(snapshot.Resources, result.Resources...)
 		snapshot.Dependencies = append(snapshot.Dependencies, result.Dependencies...)
@@ -51,6 +58,41 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 		snapshot.Resources = append(snapshot.Resources, resources...)
 		snapshot.Dependencies = append(snapshot.Dependencies, deps...)
 	}
+
+	// Resolve cross-module placeholder edges. Each placeholder points at a
+	// target module directory; expand it into one real edge per resource that
+	// lives inside that directory. Drop placeholders we can't resolve so they
+	// don't pollute the graph.
+	resourcesByDir := map[string][]string{}
+	for _, r := range snapshot.Resources {
+		if r.Source == "" || r.Type == "terraform_module" || r.Type == "terraform_convention" {
+			continue
+		}
+		clean := filepath.Clean(r.Source)
+		resourcesByDir[clean] = append(resourcesByDir[clean], r.ID)
+	}
+
+	resolved := snapshot.Dependencies[:0]
+	for _, dep := range snapshot.Dependencies {
+		target, ok := strings.CutPrefix(dep.ToResource, terraformcode.ModuleEdgePlaceholder)
+		if !ok {
+			resolved = append(resolved, dep)
+			continue
+		}
+		ids := resourcesByDir[filepath.Clean(target)]
+		for _, toID := range ids {
+			if toID == dep.FromResource {
+				continue
+			}
+			resolved = append(resolved, graph.Dependency{
+				FromResource: dep.FromResource,
+				ToResource:   toID,
+				Kind:         dep.Kind,
+				Source:       dep.Source,
+			})
+		}
+	}
+	snapshot.Dependencies = resolved
 
 	return snapshot, nil
 }

@@ -64,6 +64,7 @@ type graphNode struct {
 	ID         string         `json:"id"`
 	Label      string         `json:"label"`
 	Type       string         `json:"type"`
+	Provider   string         `json:"provider"`
 	ManagedBy  string         `json:"managed_by"`
 	ModulePath string         `json:"module_path"`
 	Source     string         `json:"source"`
@@ -90,6 +91,7 @@ func buildGraphResponse(snapshot graph.GraphSnapshot) graphResponse {
 			ID:         resource.ID,
 			Label:      resource.Identifier,
 			Type:       resource.Type,
+			Provider:   resource.Provider,
 			ManagedBy:  resource.ManagedBy,
 			ModulePath: resource.ModulePath,
 			Source:     resource.Source,
