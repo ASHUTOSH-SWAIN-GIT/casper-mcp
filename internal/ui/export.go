@@ -38,46 +38,45 @@ const exportBase = `<!doctype html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Casper Graph</title>
+  <title>Casper Infrastructure Graph</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    html,body{height:100%;background:#09090f;color:#c9d1d9;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13px;overflow:hidden}
-    .shell{display:grid;grid-template-columns:1fr 300px;height:100vh}
+    html,body{height:100%;background:#0f1115;color:#e6e6e6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;overflow:hidden}
+    .shell{display:grid;grid-template-columns:280px 1fr;height:100vh}
     .canvas-wrap{position:relative;overflow:hidden}
     svg{width:100%;height:100%;display:block}
-    .panel{background:rgba(13,17,23,0.92);border-left:1px solid #1c2128;display:flex;flex-direction:column;overflow:hidden}
-    .panel-section{padding:14px 16px;border-bottom:1px solid #1c2128;flex-shrink:0}
-    .panel-title{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:#8b949e;margin-bottom:8px}
-    .counts{font-size:11px;color:#8b949e;margin-top:2px}
-    .counts span{color:#e6edf3}
-    input[type=search]{width:100%;background:#0d1117;border:1px solid #1c2128;color:#c9d1d9;padding:7px 10px;outline:none;font-family:inherit;font-size:12px;border-radius:2px}
-    input[type=search]::placeholder{color:#3d444d}
-    input[type=search]:focus{border-color:#388bfd}
-    .node-info{padding:14px 16px;border-bottom:1px solid #1c2128;flex-shrink:0;min-height:90px}
-    .node-info-empty{color:#3d444d;font-size:12px}
-    .node-name{color:#e6edf3;font-size:13px;margin-bottom:4px;word-break:break-all}
-    .node-type-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#8b949e;margin-bottom:8px}
-    .node-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-    .node-meta{font-size:11px;color:#8b949e;line-height:1.7}
-    .node-meta span{color:#c9d1d9}
+    .panel{background:#13161c;border-right:1px solid #222;display:flex;flex-direction:column;overflow:hidden}
+    .panel-section{padding:14px 16px;border-bottom:1px solid #1c1f26;flex-shrink:0}
+    .panel-title{font-size:14px;letter-spacing:0.05em;text-transform:uppercase;color:#7aa2f7;margin-bottom:8px}
+    .counts{font-size:12px;color:#9aa5b1;margin-top:2px}
+    .counts span{color:#e6e6e6;font-weight:500}
+    input[type=search]{width:100%;background:#0f1115;border:1px solid #2a2f3a;color:#e6e6e6;padding:6px 8px;outline:none;font-family:inherit;font-size:12px;border-radius:4px}
+    input[type=search]::placeholder{color:#484f58}
+    input[type=search]:focus{border-color:#7aa2f7}
+    .node-info{padding:14px 16px;border-bottom:1px solid #1c1f26;flex-shrink:0;min-height:90px}
+    .node-info-empty{color:#484f58;font-size:12px}
+    .node-name{color:#e6e6e6;font-size:13px;margin-bottom:4px;word-break:break-all;font-weight:500}
+    .node-type-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#9aa5b1;margin-bottom:8px;font-family:ui-monospace,Menlo,monospace}
+    .node-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+    .node-meta{font-size:11px;color:#9aa5b1;line-height:1.7}
+    .node-meta span{color:#cdd2da}
     .conn-list{margin-top:6px;display:flex;flex-direction:column;gap:3px;max-height:100px;overflow-y:auto}
-    .conn-item{font-size:11px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .conn-item span{color:#388bfd}
+    .conn-item{font-size:11px;color:#9aa5b1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Menlo,monospace}
+    .conn-item span{color:#7aa2f7}
     .communities-wrap{flex:1;overflow-y:auto}
-    .comm-item{display:flex;align-items:center;gap:8px;padding:7px 16px;cursor:pointer;border-bottom:1px solid #1c2128}
-    .comm-item:hover{background:#0d1117}
-    .comm-item.active-comm{background:#0d1117;border-left:2px solid #388bfd;padding-left:14px}
-    .comm-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
-    .comm-name{flex:1;font-size:12px;color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .comm-item{display:flex;align-items:center;gap:8px;padding:7px 16px;cursor:pointer;border-bottom:1px solid #1c1f26}
+    .comm-item:hover{background:#0f1115}
+    .comm-item.active-comm{background:#0f1115;border-left:2px solid #7aa2f7;padding-left:14px}
+    .comm-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+    .comm-name{flex:1;font-size:12px;color:#cdd2da;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .comm-count{font-size:11px;color:#484f58;flex-shrink:0}
   </style>
 </head>
 <body>
 <div class="shell">
-  <main class="canvas-wrap"><svg id="graph"></svg></main>
   <aside class="panel">
     <div class="panel-section">
-      <div class="panel-title">Casper Graph</div>
+      <div class="panel-title">Casper</div>
       <div class="counts">nodes: <span id="nodeCount">—</span>&ensp;edges: <span id="edgeCount">—</span></div>
     </div>
     <div class="panel-section" style="padding:10px 16px">
@@ -89,6 +88,7 @@ const exportBase = `<!doctype html>
     </div>
     <div class="communities-wrap" id="commList"></div>
   </aside>
+  <main class="canvas-wrap"><svg id="graph"></svg></main>
 </div>
 <script>
 const GRAPH_DATA = /*GRAPH_DATA*/;
@@ -223,7 +223,7 @@ function renderGraph(transformOnly){
   const visible=new Set(state.data.nodes.filter(n=>state.visibleIds.has(n.id)).map(n=>n.id));
   const conn=neighbors(state.selectedId);
   const showLabels=state.zoom>0.42;
-  let out='<rect width="100%" height="100%" fill="#09090f"/><g id="vp" transform="translate('+state.pan.x+','+state.pan.y+') scale('+state.zoom+')">';
+  let out='<rect width="100%" height="100%" fill="#0f1115"/><g id="vp" transform="translate('+state.pan.x+','+state.pan.y+') scale('+state.zoom+')">';
   for(const e of state.data.edges){
     if(!visible.has(e.from)||!visible.has(e.to))continue;
     const a=state.data.nodeById.get(e.from),b=state.data.nodeById.get(e.to);
