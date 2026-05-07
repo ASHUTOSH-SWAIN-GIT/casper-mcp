@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -475,48 +476,174 @@ Instructions:
 
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	global := fs.Bool("global", false, "write to ~/.claude/ instead of .claude/ (works for any project)")
+	client := fs.String("client", "claude-code", "MCP client: claude-code | claude-desktop | cursor | codex")
+	global := fs.Bool("global", false, "register at user scope instead of project (claude-code and cursor only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	switch strings.ToLower(*client) {
+	case "claude-code", "claude":
+		return initClaudeCode(*global)
+	case "claude-desktop", "desktop":
+		return initClaudeDesktop()
+	case "cursor":
+		return initCursor(*global)
+	case "codex":
+		return initCodex()
+	default:
+		return fmt.Errorf("unknown --client %q (supported: claude-code, claude-desktop, cursor, codex)", *client)
+	}
+}
+
+func initClaudeCode(global bool) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("get home dir: %w", err)
 	}
 
-	var commandsDir string
-	if *global {
+	commandsDir := filepath.Join(".claude", "commands")
+	if global {
 		commandsDir = filepath.Join(home, ".claude", "commands")
-	} else {
-		commandsDir = filepath.Join(".claude", "commands")
 	}
-
 	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
 		return fmt.Errorf("create commands dir: %w", err)
 	}
-
 	commandDest := filepath.Join(commandsDir, "casper.md")
 	if err := os.WriteFile(commandDest, []byte(casperCommand), 0o644); err != nil {
 		return fmt.Errorf("write command file: %w", err)
 	}
 	fmt.Printf("created %s\n", commandDest)
 
-	if *global {
-		// For global init, let Claude Code write the current user-scope MCP
-		// config. Claude Code stores MCP servers in ~/.claude.json, not in
-		// ~/.claude/settings.json.
+	if global {
 		if err := registerGlobalMCPServerWithClaude(); err != nil {
 			return fmt.Errorf("register Claude Code MCP server: %w", err)
 		}
 		fmt.Println("run /casper in any Claude Code session to query that project's infrastructure")
-	} else {
-		// For project init, write .mcp.json so Claude Code auto-spawns the server.
-		if err := writeMCPJSON(".mcp.json"); err != nil {
-			return fmt.Errorf("write .mcp.json: %w", err)
-		}
-		fmt.Println("run /casper in Claude Code inside this project to query your infrastructure")
+		return nil
 	}
+
+	if err := writeMCPJSON(".mcp.json"); err != nil {
+		return fmt.Errorf("write .mcp.json: %w", err)
+	}
+	fmt.Println("run /casper in Claude Code inside this project to query your infrastructure")
+	return nil
+}
+
+func initClaudeDesktop() error {
+	dest, err := claudeDesktopConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	if err := writeMCPJSON(dest); err != nil {
+		return fmt.Errorf("write Claude Desktop config: %w", err)
+	}
+	fmt.Println("restart Claude Desktop, then ask the model to use the casper tools")
+	return nil
+}
+
+func initCursor(global bool) error {
+	dest := filepath.Join(".cursor", "mcp.json")
+	if global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get home dir: %w", err)
+		}
+		dest = filepath.Join(home, ".cursor", "mcp.json")
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("create cursor config dir: %w", err)
+	}
+	if err := writeMCPJSON(dest); err != nil {
+		return fmt.Errorf("write Cursor mcp.json: %w", err)
+	}
+	scope := "this project"
+	if global {
+		scope = "every Cursor project"
+	}
+	fmt.Printf("restart Cursor — Casper is wired up for %s\n", scope)
+	return nil
+}
+
+func initCodex() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home dir: %w", err)
+	}
+	dest := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("create codex config dir: %w", err)
+	}
+	if err := writeCodexTOML(dest); err != nil {
+		return fmt.Errorf("write %s: %w", dest, err)
+	}
+	fmt.Println("restart Codex CLI — Casper is registered as an MCP server")
+	return nil
+}
+
+func claudeDesktopConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get home dir: %w", err)
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), nil
+	case "windows":
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			appData = filepath.Join(home, "AppData", "Roaming")
+		}
+		return filepath.Join(appData, "Claude", "claude_desktop_config.json"), nil
+	default:
+		return filepath.Join(home, ".config", "Claude", "claude_desktop_config.json"), nil
+	}
+}
+
+// writeCodexTOML appends or updates the [mcp_servers.casper] block in a Codex
+// config.toml file, preserving any other content already present.
+func writeCodexTOML(dest string) error {
+	exe := resolveExecutable()
+	block := fmt.Sprintf(`[mcp_servers.casper]
+command = %q
+args = ["serve", "--dir", ".", "--html", "casper/graph.html"]
+`, exe)
+
+	existing, err := os.ReadFile(dest)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	var out string
+	if len(existing) == 0 {
+		out = block
+	} else if idx := strings.Index(string(existing), "[mcp_servers.casper]"); idx >= 0 {
+		// Replace existing block: from header to next [section] or EOF.
+		text := string(existing)
+		end := len(text)
+		if next := strings.Index(text[idx+len("[mcp_servers.casper]"):], "\n["); next >= 0 {
+			end = idx + len("[mcp_servers.casper]") + next + 1
+		}
+		out = text[:idx] + block + text[end:]
+	} else {
+		// Append, ensuring blank line separator.
+		text := string(existing)
+		if !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		if !strings.HasSuffix(text, "\n\n") {
+			text += "\n"
+		}
+		out = text + block
+	}
+
+	if err := os.WriteFile(dest, []byte(out), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("updated %s\n", dest)
 	return nil
 }
 
@@ -590,10 +717,13 @@ func registerGlobalMCPServerWithClaude() error {
 
 func usage() error {
 	return fmt.Errorf("usage: casper-mcp <command> [flags]\n\nCommands:\n" +
-		"  init    [--global]         Create /casper slash command + wire up MCP server.\n" +
-		"                             Default: writes .mcp.json + .claude/commands/casper.md in the current project.\n" +
-		"                             --global: registers a Claude Code user-scope MCP server + ~/.claude/commands/casper.md\n" +
-		"                                       so Casper is available in every Claude Code project automatically.\n" +
+		"  init    [--client <c>] [--global]\n" +
+		"            Wire up Casper for an MCP client.\n" +
+		"            --client claude-code   (default) writes .mcp.json + .claude/commands/casper.md\n" +
+		"                                   add --global for ~/.claude.json + ~/.claude/commands/casper.md\n" +
+		"            --client claude-desktop  writes claude_desktop_config.json (user scope)\n" +
+		"            --client cursor        writes .cursor/mcp.json (project)  add --global for ~/.cursor/mcp.json\n" +
+		"            --client codex         writes ~/.codex/config.toml ([mcp_servers.casper] block)\n" +
 		"  serve   -dir <path> [-html <path>]\n" +
 		"            Scan a Terraform directory and start the MCP server over stdio.\n" +
 		"            Used by Claude Code, Cursor, and Claude Desktop via .mcp.json.\n\n" +

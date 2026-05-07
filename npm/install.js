@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Downloads the casper-mcp binary and installs the /casper Claude Code slash command.
+// Downloads the casper-mcp binary and auto-wires it into every MCP client we
+// can detect on the system. The user does not have to run `casper-mcp init`.
 
 const https = require("https");
 const fs = require("fs");
@@ -12,6 +13,8 @@ const BIN_DIR = path.join(__dirname, "bin");
 const IS_WINDOWS = process.platform === "win32";
 const BIN_PATH = path.join(BIN_DIR, IS_WINDOWS ? "casper-mcp.exe" : "casper-mcp");
 
+const SERVER_ARGS = ["serve", "--dir", ".", "--html", "casper/graph.html"];
+
 const SLASH_COMMAND = `Use the casper MCP tools to build infrastructure context for this project.
 
 $ARGUMENTS
@@ -21,6 +24,7 @@ Instructions:
 - If no intent was provided, call dump_graph to get a full snapshot of the infrastructure graph, then summarise: total resources, resource types, and any policy violations.
 - After getting context, briefly describe what you found — resource names, types, dependencies, and anything notable (drift, policy violations, workflow decisions).
 - If the user wants to make a change, call simulate_impact with the proposed HCL before applying anything.
+- The Casper server renders an interactive graph to casper/graph.html and keeps it in sync with your Terraform files. Mention the path to the user so they can open it in a browser.
 `;
 
 function platformKey() {
@@ -46,39 +50,55 @@ function download(url, dest) {
   });
 }
 
+// Resolve the absolute path to the casper-mcp executable so that GUI apps
+// (Electron, etc.) can find it even when /opt/homebrew/bin is not on their PATH.
+function resolveBinaryPath() {
+  if (fs.existsSync(BIN_PATH)) return BIN_PATH;
+  try {
+    const which = IS_WINDOWS ? "where" : "which";
+    return execFileSync(which, ["casper-mcp"], { encoding: "utf8" }).trim().split("\n")[0];
+  } catch (_) {
+    return "casper-mcp";
+  }
+}
+
 function installSlashCommand() {
   try {
     const claudeDir = path.join(os.homedir(), ".claude", "commands");
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(path.join(claudeDir, "casper.md"), SLASH_COMMAND);
     console.log("casper-mcp: /casper slash command installed for Claude Code");
-  } catch (e) {
-    // Non-fatal
-  }
+  } catch (_) { /* non-fatal */ }
 }
 
-// Resolve the absolute path to the casper-mcp executable so that GUI apps
-// (Electron, etc.) can find it even when /opt/homebrew/bin is not on their PATH.
-function resolveBinaryPath() {
-  // Prefer the downloaded Go binary bundled in this npm package.
-  if (fs.existsSync(BIN_PATH)) return BIN_PATH;
-  // Fall back to whatever is on PATH (e.g. installed via `go install`).
-  try {
-    const which = IS_WINDOWS ? "where" : "which";
-    return execFileSync(which, ["casper-mcp"], { encoding: "utf8" }).trim().split("\n")[0];
-  } catch (_) {
-    return "casper-mcp"; // last resort — bare name
+// Merge the casper entry into a JSON-format MCP config, preserving any other
+// servers the user already has registered.
+function mergeJSONConfig(configPath) {
+  let existing = {};
+  if (fs.existsSync(configPath)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(configPath, "utf8")) || {};
+    } catch (_) { /* corrupted file → overwrite cleanly */ }
   }
+  const servers = existing.mcpServers || {};
+  servers.casper = {
+    command: resolveBinaryPath(),
+    args: SERVER_ARGS,
+  };
+  existing.mcpServers = servers;
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify(existing, null, 2) + "\n");
 }
 
-function installClaudeConfig() {
+function installClaudeCodeUserScope() {
+  // Prefer the official `claude mcp add-json` if Claude Code CLI is installed —
+  // it lands in the version-correct user-scope file (~/.claude.json today).
   try {
     const config = {
       type: "stdio",
       command: resolveBinaryPath(),
-      args: ["serve", "--dir", "."],
+      args: SERVER_ARGS,
     };
-
     execFileSync("claude", [
       "mcp",
       "add-json",
@@ -87,30 +107,68 @@ function installClaudeConfig() {
       "--scope",
       "user",
     ], { stdio: "ignore" });
-
     console.log("casper-mcp: registered with Claude Code (user MCP scope)");
-  } catch (e) {
-    console.log("casper-mcp: skipped Claude Code MCP registration; run `casper-mcp init` inside a project or add it with `claude mcp add-json`");
+  } catch (_) {
+    // Claude Code CLI not present or registration failed — skip silently.
   }
 }
 
-function installCodexConfig() {
+function installClaudeDesktop() {
+  let configPath;
+  if (process.platform === "darwin") {
+    configPath = path.join(os.homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
+  } else if (process.platform === "win32") {
+    configPath = path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
+  } else {
+    configPath = path.join(os.homedir(), ".config", "Claude", "claude_desktop_config.json");
+  }
+
+  // Only register if Claude Desktop's directory exists — otherwise we'd litter
+  // the filesystem on machines that don't run Claude Desktop.
+  if (!fs.existsSync(path.dirname(configPath))) return;
+
+  try {
+    mergeJSONConfig(configPath);
+    console.log("casper-mcp: registered with Claude Desktop");
+  } catch (_) { /* non-fatal */ }
+}
+
+function installCursor() {
+  const cursorDir = path.join(os.homedir(), ".cursor");
+  if (!fs.existsSync(cursorDir)) return;
+  try {
+    mergeJSONConfig(path.join(cursorDir, "mcp.json"));
+    console.log("casper-mcp: registered with Cursor (user scope)");
+  } catch (_) { /* non-fatal */ }
+}
+
+function installCodex() {
   try {
     const configPath = path.join(os.homedir(), ".codex", "config.toml");
-    const cmd = resolveBinaryPath().replace(/\\/g, "\\\\"); // escape backslashes for Windows paths
-    const entry = `\n[mcp_servers.casper]\ncommand = "${cmd}"\nargs = ["serve", "--dir", "."]\n`;
+    const cmd = resolveBinaryPath().replace(/\\/g, "\\\\");
+    const argsToml = SERVER_ARGS.map((a) => `"${a}"`).join(", ");
+    const block = `[mcp_servers.casper]\ncommand = "${cmd}"\nargs = [${argsToml}]\n`;
 
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
 
-    if (fs.existsSync(configPath)) {
-      const existing = fs.readFileSync(configPath, "utf8");
-      if (existing.includes("[mcp_servers.casper]")) return; // already configured
-      fs.appendFileSync(configPath, entry);
+    if (!fs.existsSync(configPath)) {
+      fs.writeFileSync(configPath, block);
     } else {
-      fs.writeFileSync(configPath, entry.trimStart());
+      const text = fs.readFileSync(configPath, "utf8");
+      const idx = text.indexOf("[mcp_servers.casper]");
+      if (idx === -1) {
+        fs.appendFileSync(configPath, (text.endsWith("\n") ? "\n" : "\n\n") + block);
+      } else {
+        // Replace the existing block so the args/path get updated.
+        const headerLen = "[mcp_servers.casper]".length;
+        const tail = text.slice(idx + headerLen);
+        const next = tail.indexOf("\n[");
+        const end = next === -1 ? text.length : idx + headerLen + next + 1;
+        fs.writeFileSync(configPath, text.slice(0, idx) + block + text.slice(end));
+      }
     }
-    console.log("casper-mcp: registered in ~/.codex/config.toml (Codex)");
-  } catch (e) { /* non-fatal */ }
+    console.log("casper-mcp: registered in ~/.codex/config.toml");
+  } catch (_) { /* non-fatal */ }
 }
 
 async function main() {
@@ -145,8 +203,12 @@ async function main() {
   }
 
   installSlashCommand();
-  installClaudeConfig();
-  installCodexConfig();
+  installClaudeCodeUserScope();
+  installClaudeDesktop();
+  installCursor();
+  installCodex();
+
+  console.log("casper-mcp: setup complete — restart your MCP client to use Casper");
 }
 
 main().catch((err) => {
