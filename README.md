@@ -182,6 +182,8 @@ workflow_rules:
 
 Policy violations are surfaced in `simulate_impact` and `dump_graph` responses. Workflow decisions are advisory — the agent reads them and follows them, but no hard enforcement occurs. Decisions: `allow`, `require_approval`, `require_security_review`, `block`.
 
+For the full guide — rule types, workflow routing, design tips — see [docs/POLICIES.md](docs/POLICIES.md).
+
 ## Repository layout
 
 ```
@@ -201,7 +203,7 @@ casper-mcp/
 │   └── migrations/        Postgres schema migrations
 ├── migrations/            SQL migration files
 ├── tests/                 All Go tests (mirrors internal/ package layout)
-├── docs/                  TOOLS.md, prd.md, DEVELOPMENT.md, test-repos.md
+├── docs/                  TOOLS.md, POLICIES.md, prd.md, DEVELOPMENT.md, test-repos.md
 ├── npm/                   npm wrapper that downloads the right binary
 └── fixtures/              Sample Terraform state for tests
 ```
