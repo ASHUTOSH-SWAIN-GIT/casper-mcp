@@ -417,6 +417,12 @@ func ExtractResourceRefs(expr string) []string {
 			case "var", "local", "data", "module", "path", "each", "count", "self":
 				continue
 			}
+			// Terraform resource types always contain at least one underscore
+			// (provider_resource), so this filters out dotted string literals like
+			// "api.example.com" that would otherwise look like resource refs.
+			if !strings.Contains(segments[0], "_") {
+				continue
+			}
 			refs = append(refs, segments[0]+"."+segments[1])
 		}
 	}

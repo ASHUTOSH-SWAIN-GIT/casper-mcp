@@ -3,6 +3,7 @@ package ingest
 import (
 	"encoding/json"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +26,7 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 	for _, f := range stateFiles {
 		result, err := terraformstate.ParseFile(f)
 		if err != nil {
+			log.Printf("casper: skipping state file %s: %v", f, err)
 			continue
 		}
 		// Backfill Provider on state-derived resources too.
@@ -53,6 +55,7 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 		seen[d] = struct{}{}
 		resources, deps, err := terraformcode.ParseDirResources(d)
 		if err != nil {
+			log.Printf("casper: skipping module %s: %v", d, err)
 			continue
 		}
 		snapshot.Resources = append(snapshot.Resources, resources...)

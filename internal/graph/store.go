@@ -491,6 +491,13 @@ func scanResource(scanner resourceScanner) (Resource, error) {
 	if err := json.Unmarshal(tags, &resource.Tags); err != nil {
 		return Resource{}, fmt.Errorf("unmarshal tags for %s: %w", resource.ID, err)
 	}
+	// Postgres schema doesn't store provider; derive it from type so structured
+	// filters (find_resource --provider) work in DB-backed mode.
+	if i := strings.Index(resource.Type, "_"); i > 0 {
+		resource.Provider = resource.Type[:i]
+	} else {
+		resource.Provider = resource.Type
+	}
 	return resource, nil
 }
 

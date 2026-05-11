@@ -632,10 +632,16 @@ Other tools available: find_similar (HCL examples), get_module_for (reusable mod
 					}
 					var viols []policy.Violation
 					if len(policies) > 0 {
-						args := make(map[string]string)
-						for k, v := range r.Attributes {
-							if s, ok := v.(string); ok {
-								args[k] = s
+						// Code-scanned resources store HCL arg values under
+						// attributes.arguments; state-derived ones store them at
+						// the top level. Prefer the nested map when present.
+						args, _ := r.Attributes["arguments"].(map[string]string)
+						if args == nil {
+							args = make(map[string]string)
+							for k, v := range r.Attributes {
+								if s, ok := v.(string); ok {
+									args[k] = s
+								}
 							}
 						}
 						viols = policy.Check(policies, r.Type, r.Identifier, args, tags)

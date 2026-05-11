@@ -458,7 +458,13 @@ func cloneAndReload(ctx context.Context, repoURL, token string, liveStore *graph
 	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", cloneURL, tmpDir)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return 0, 0, fmt.Errorf("git clone failed: %w\n%s", err, out)
+		// git error output can include the clone URL (which has the PAT embedded
+		// on auth failures). Scrub the token before surfacing the error.
+		safe := string(out)
+		if token != "" {
+			safe = strings.ReplaceAll(safe, token, "***")
+		}
+		return 0, 0, fmt.Errorf("git clone failed: %w\n%s", err, safe)
 	}
 
 	snapshot, err := ingest.Scan(tmpDir)

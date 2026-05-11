@@ -286,6 +286,34 @@ resource "aws_security_group" "orphan" {
 	}
 }
 
+func TestE2E_FindResource_ExtractsTags(t *testing.T) {
+	// Regression: parseResourceBlockDetails used to drop all HCL tags
+	// (Tags was always set to an empty map). The fixture's aws_vpc.main
+	// has tags = { Name = "${var.name_prefix}-vpc"; env = "prod" }, so
+	// the resource returned should now carry env=prod.
+	c := newClient(t)
+	res := callTool(t, c, "find_resource", map[string]any{"query": "aws_vpc.main"})
+
+	var payload struct {
+		Matches []map[string]any `json:"matches"`
+	}
+	unmarshalJSON(t, res, &payload)
+
+	var found map[string]any
+	for _, r := range payload.Matches {
+		if r["Identifier"] == "aws_vpc.main" {
+			found = r
+		}
+	}
+	if found == nil {
+		t.Fatalf("aws_vpc.main missing from result: %s", textContent(res))
+	}
+	tags, _ := found["Tags"].(map[string]any)
+	if tags["env"] != "prod" {
+		t.Errorf("expected tags.env=prod on aws_vpc.main, got tags=%v", tags)
+	}
+}
+
 func TestE2E_DumpGraph(t *testing.T) {
 	c := newClient(t)
 	res := callTool(t, c, "dump_graph", map[string]any{})

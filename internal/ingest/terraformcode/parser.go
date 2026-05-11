@@ -10,9 +10,11 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
+	"github.com/zclconf/go-cty/cty"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 )
@@ -21,6 +23,13 @@ type resourceBlockDetail struct {
 	Type      string
 	Name      string
 	Arguments map[string]string
+	Tags      map[string]string
+	// RefsBlob is the concatenated text of every attribute value in the
+	// resource block, including nested blocks (ingress, egress, dynamic,
+	// lifecycle, etc.). Used only for dependency extraction — keeps
+	// `Arguments` scoped to top-level attrs while still capturing references
+	// that live inside nested blocks.
+	RefsBlob string
 }
 
 func ParseDir(path string) ([]graph.Resource, error) {
@@ -101,8 +110,14 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 			"resource_name": r.Name,
 			"module_path":   modulePath,
 		}
-		if detail, ok := detailIndex[resourceDetailKey(r.Type, r.Name)]; ok && len(detail.Arguments) > 0 {
-			attrs["arguments"] = detail.Arguments
+		resourceTags := map[string]any{}
+		if detail, ok := detailIndex[resourceDetailKey(r.Type, r.Name)]; ok {
+			if len(detail.Arguments) > 0 {
+				attrs["arguments"] = detail.Arguments
+			}
+			for k, v := range detail.Tags {
+				resourceTags[k] = v
+			}
 		}
 		resources = append(resources, graph.Resource{
 			ID:         resourceInstanceID(r.Type, r.Name, modulePath),
@@ -111,7 +126,7 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 			Provider:   ProviderFromType(r.Type),
 			Identifier: r.Type + "." + r.Name,
 			Attributes: attrs,
-			Tags:       map[string]any{},
+			Tags:       resourceTags,
 			ModulePath: modulePath,
 			ManagedBy:  "terraform_code",
 		})
@@ -144,7 +159,16 @@ func ParseDirResources(path string) ([]graph.Resource, []graph.Dependency, error
 		}
 		seenLocal := map[string]bool{}
 		seenModule := map[string]bool{}
+		// Build the search corpus once: every top-level arg value plus the
+		// refs blob covering nested blocks. Single scan vs N scans.
+		exprs := make([]string, 0, len(detail.Arguments)+1)
 		for _, expr := range detail.Arguments {
+			exprs = append(exprs, expr)
+		}
+		if detail.RefsBlob != "" {
+			exprs = append(exprs, detail.RefsBlob)
+		}
+		for _, expr := range exprs {
 			// Same-module resource refs.
 			for toRef, toID := range knownRef {
 				if toRef == fromRef || seenLocal[toRef] {
@@ -391,6 +415,95 @@ func managedResourceNames(resources []*tfconfig.Resource) []string {
 	return names
 }
 
+// collectRefsBlob walks an HCL body recursively and concatenates every
+// attribute value's raw text — including those inside nested blocks like
+// ingress/egress/dynamic/lifecycle — into a single string. Used solely
+// for dependency extraction so resource references in nested blocks
+// (a common Terraform pattern) aren't silently dropped.
+func collectRefsBlob(body *hclsyntax.Body, src []byte) string {
+	var b strings.Builder
+	var walk func(*hclsyntax.Body)
+	walk = func(blk *hclsyntax.Body) {
+		if blk == nil {
+			return
+		}
+		for _, attr := range blk.Attributes {
+			r := attr.Expr.Range()
+			if r.Start.Byte < 0 || r.End.Byte > len(src) || r.Start.Byte >= r.End.Byte {
+				continue
+			}
+			b.Write(src[r.Start.Byte:r.End.Byte])
+			b.WriteByte(' ')
+		}
+		for _, nested := range blk.Blocks {
+			walk(nested.Body)
+		}
+	}
+	walk(body)
+	return b.String()
+}
+
+// tagKeyName returns the static string key from an HCL object item key
+// expression, or "" if the key is dynamic (e.g. var.foo).
+func tagKeyName(expr hclsyntax.Expression, src []byte) string {
+	// Object keys come wrapped in ObjectConsKeyExpr; unwrap once.
+	if k, ok := expr.(*hclsyntax.ObjectConsKeyExpr); ok {
+		expr = k.Wrapped
+	}
+	switch e := expr.(type) {
+	case *hclsyntax.ScopeTraversalExpr:
+		// Bare identifiers: tags = { Name = "x" } — the key is `Name`.
+		if len(e.Traversal) == 1 {
+			if root, ok := e.Traversal[0].(hcl.TraverseRoot); ok {
+				return root.Name
+			}
+		}
+	case *hclsyntax.TemplateExpr:
+		// Quoted string literals: tags = { "Name" = "x" }
+		if e.IsStringLiteral() {
+			r := e.Range()
+			if r.Start.Byte >= 0 && r.End.Byte <= len(src) {
+				s := strings.TrimSpace(string(src[r.Start.Byte:r.End.Byte]))
+				if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+					return s[1 : len(s)-1]
+				}
+			}
+		}
+	case *hclsyntax.LiteralValueExpr:
+		if e.Val.Type() == cty.String {
+			return e.Val.AsString()
+		}
+	}
+	return ""
+}
+
+// tagStaticValue returns the static string value of an HCL tag value
+// expression, or "" if the value isn't a plain string literal.
+// Skips references (var.x, aws_*.foo.id) and interpolations — keeping only
+// values policy/env checks can reason about.
+func tagStaticValue(expr hclsyntax.Expression, src []byte) string {
+	switch e := expr.(type) {
+	case *hclsyntax.TemplateExpr:
+		if !e.IsStringLiteral() {
+			return ""
+		}
+		r := e.Range()
+		if r.Start.Byte < 0 || r.End.Byte > len(src) {
+			return ""
+		}
+		s := strings.TrimSpace(string(src[r.Start.Byte:r.End.Byte]))
+		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+			return s[1 : len(s)-1]
+		}
+		return s
+	case *hclsyntax.LiteralValueExpr:
+		if e.Val.Type() == cty.String {
+			return e.Val.AsString()
+		}
+	}
+	return ""
+}
+
 func parseResourceBlockDetails(dir string) ([]resourceBlockDetail, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.tf"))
 	if err != nil {
@@ -421,6 +534,7 @@ func parseResourceBlockDetails(dir string) ([]resourceBlockDetail, error) {
 			}
 
 			arguments := map[string]string{}
+			var tags map[string]string
 			for name, attribute := range block.Body.Attributes {
 				exprRange := attribute.Expr.Range()
 				if exprRange.Start.Byte < 0 || exprRange.End.Byte > len(src) || exprRange.Start.Byte >= exprRange.End.Byte {
@@ -434,12 +548,36 @@ func parseResourceBlockDetails(dir string) ([]resourceBlockDetail, error) {
 					val = val[1 : len(val)-1]
 				}
 				arguments[name] = val
+
+				// Lift static keys out of `tags = { ... }` so policy checks and
+				// env detection see them. Values that are HCL references
+				// (var.x, aws_*.foo.id) stay in arguments but are skipped here.
+				if name == "tags" || name == "tags_all" {
+					if obj, ok := attribute.Expr.(*hclsyntax.ObjectConsExpr); ok {
+						for _, item := range obj.Items {
+							key := tagKeyName(item.KeyExpr, src)
+							if key == "" {
+								continue
+							}
+							value := tagStaticValue(item.ValueExpr, src)
+							if value == "" {
+								continue
+							}
+							if tags == nil {
+								tags = map[string]string{}
+							}
+							tags[key] = value
+						}
+					}
+				}
 			}
 
 			details = append(details, resourceBlockDetail{
 				Type:      block.Labels[0],
 				Name:      block.Labels[1],
 				Arguments: arguments,
+				Tags:      tags,
+				RefsBlob:  collectRefsBlob(block.Body, src),
 			})
 		}
 	}
