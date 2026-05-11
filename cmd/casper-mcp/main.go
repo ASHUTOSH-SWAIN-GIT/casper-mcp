@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"net/http"
 	"os"
@@ -268,11 +267,7 @@ func runServe(ctx context.Context, args []string) error {
 		}
 	}()
 
-	reloadFromGitHub := func(ctx context.Context, repoURL, token string) (int, int, error) {
-		return cloneAndReload(ctx, repoURL, token, liveStore)
-	}
-
-	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies, reloadFromGitHub, renderHTML)
+	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies, renderHTML)
 	log.Printf("casper: serving %s over stdio (graph render is lazy — triggered by render_graph / /casper)", absDir)
 	return server.ServeStdio(mcpSrv)
 }
@@ -435,46 +430,6 @@ func runExport(ctx context.Context, args []string) error {
 		openBrowser(absOut)
 	}
 	return nil
-}
-
-// cloneAndReload clones a GitHub repo to a temp dir, scans it, and reloads the live store.
-func cloneAndReload(ctx context.Context, repoURL, token string, liveStore *graph.LiveStore) (int, int, error) {
-	// Build a stable temp dir name from the URL content so the same repo always
-	// gets the same dir and different repos never collide.
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(repoURL))
-	tmpDir := filepath.Join(os.TempDir(), fmt.Sprintf("casper-%x", h.Sum32()))
-
-	// If the dir already exists, remove it so we get a clean clone.
-	_ = os.RemoveAll(tmpDir)
-
-	cloneURL := repoURL
-	if token != "" {
-		// Inject token into HTTPS URL: https://<token>@github.com/...
-		cloneURL = strings.Replace(repoURL, "https://", "https://"+token+"@", 1)
-	}
-
-	log.Printf("casper: cloning %s → %s", repoURL, tmpDir)
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", cloneURL, tmpDir)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// git error output can include the clone URL (which has the PAT embedded
-		// on auth failures). Scrub the token before surfacing the error.
-		safe := string(out)
-		if token != "" {
-			safe = strings.ReplaceAll(safe, token, "***")
-		}
-		return 0, 0, fmt.Errorf("git clone failed: %w\n%s", err, safe)
-	}
-
-	snapshot, err := ingest.Scan(tmpDir)
-	if err != nil {
-		return 0, 0, fmt.Errorf("scan %s: %w", tmpDir, err)
-	}
-
-	liveStore.Reload(snapshot)
-	log.Printf("casper: loaded %d resources, %d deps from %s", len(snapshot.Resources), len(snapshot.Dependencies), repoURL)
-	return len(snapshot.Resources), len(snapshot.Dependencies), nil
 }
 
 func openBrowser(path string) {

@@ -1,7 +1,5 @@
 FROM golang:1.25.5-alpine
 
-RUN apk add --no-cache git
-
 WORKDIR /src
 
 COPY go.mod go.sum ./

@@ -19,16 +19,12 @@ import (
 
 type SimulateFunc func(code string) (*graph.ImpactResult, error)
 
-// ReloadFunc clones a GitHub URL to a temp dir, rescans, and reloads the live store.
-// Passed as nil when the server has no live-reload capability (e.g. postgres mode).
-type ReloadFunc func(ctx context.Context, repoURL, token string) (resourceCount int, depCount int, err error)
-
 // RenderFunc writes the live graph to disk and returns the absolute output path,
 // the directory the graph was scanned from, and resource/edge counts.
 // Passed as nil when no HTML rendering is configured.
 type RenderFunc func(ctx context.Context) (path string, dir string, resourceCount int, edgeCount int, err error)
 
-func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, policies []policy.Policy, reload ReloadFunc, render RenderFunc) *server.MCPServer {
+func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, policies []policy.Policy, render RenderFunc) *server.MCPServer {
 	s := server.NewMCPServer(
 		"casper",
 		"0.1.0",
@@ -42,7 +38,7 @@ Recommended workflow:
 4. Use dump_graph only for full audits or visualizations. Don't dump and re-parse.
 5. Before presenting authored Terraform, call simulate_impact — it returns blast radius, broken refs, similar examples, reversibility, and policy violations.
 
-Other tools available: find_similar (HCL examples), get_module_for (reusable modules), get_conventions (codebase patterns), get_dependencies (graph walk), describe_live_state (AWS drift), render_graph (interactive HTML), load_repo (swap repos).`),
+Other tools available: find_similar (HCL examples), get_module_for (reusable modules), get_conventions (codebase patterns), get_dependencies (graph walk), describe_live_state (AWS drift), render_graph (interactive HTML).`),
 	)
 
 	s.AddTool(
@@ -513,42 +509,6 @@ Other tools available: find_similar (HCL examples), get_module_for (reusable mod
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 
-				return mcp.NewToolResultText(string(payload)), nil
-			},
-		)
-	}
-
-	// load_repo: clone a GitHub repo and reload the graph
-	if reload != nil {
-		s.AddTool(
-			mcp.NewTool(
-				"load_repo",
-				mcp.WithDescription("Clone a GitHub repository and reload the infrastructure graph from it. After this call, all other tools (find_resource, simulate_impact, dump_graph, etc.) operate on the newly loaded repo. Returns resource and dependency counts."),
-				mcp.WithTitleAnnotation("Load GitHub Repo"),
-				mcp.WithReadOnlyHintAnnotation(false),
-				mcp.WithDestructiveHintAnnotation(false),
-				mcp.WithIdempotentHintAnnotation(false),
-				mcp.WithString("url", mcp.Required(), mcp.Description("GitHub repository HTTPS URL, e.g. https://github.com/org/infra-repo")),
-				mcp.WithString("token", mcp.Description("GitHub personal access token for private repositories. Leave empty for public repos.")),
-			),
-			func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				repoURL, err := request.RequireString("url")
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-				token, _ := request.GetArguments()["token"].(string)
-
-				resources, deps, err := reload(ctx, repoURL, token)
-				if err != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("load_repo failed: %v", err)), nil
-				}
-
-				payload, _ := json.Marshal(map[string]any{
-					"status":         "loaded",
-					"url":            repoURL,
-					"resource_count": resources,
-					"dep_count":      deps,
-				})
 				return mcp.NewToolResultText(string(payload)), nil
 			},
 		)

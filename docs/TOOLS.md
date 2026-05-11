@@ -263,35 +263,6 @@ If the section is absent, the tool returns an error explaining how to configure 
 
 ---
 
-## load_repo
-
-**Purpose:** Clone a GitHub repository and reload the infrastructure graph from it. After this call, all other tools operate on the newly loaded repo — the in-memory graph is replaced atomically.
-
-**Input:**
-
-| Param | Required | Description |
-|-------|----------|-------------|
-| `url` | yes | GitHub repository HTTPS URL, e.g. `https://github.com/org/infra-repo` |
-| `token` | no | GitHub personal access token for private repositories. Leave empty for public repos |
-
-**Returns:**
-
-| Field | Description |
-|-------|-------------|
-| `status` | `"loaded"` on success |
-| `url` | The URL that was cloned |
-| `resource_count` | Number of Terraform resources found in the repo |
-| `dep_count` | Number of dependency edges in the graph |
-
-**Notes:**
-- Clones with `--depth=1` (shallow) — fast for large repos
-- The cloned repo is placed in a stable temp dir keyed by URL hash, so re-loading the same URL is idempotent (removes and re-clones)
-- Only available in `serve` mode (not `ingest`/`watch`)
-
-**When to use:** To point the server at a different infrastructure repo without restarting. Typically called once at session start when the client provides a GitHub URL.
-
----
-
 ## dump_graph
 
 **Purpose:** Return the complete infrastructure graph in a single call — all resources, all dependency edges, resource counts by type, and policy violations evaluated per resource. Designed to bootstrap a client-side graph view.

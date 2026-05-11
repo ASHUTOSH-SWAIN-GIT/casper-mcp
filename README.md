@@ -8,7 +8,6 @@ An MCP server that gives AI agents a live, queryable view of your Terraform infr
 - **Simulate changes** — parse proposed HCL and get blast radius, broken references, and policy violations before applying
 - **Detect drift** — compare Terraform state against live AWS via read-only Describe APIs
 - **Enforce policies** — define rules in `.casper/policies.yaml` (`must_equal`, `min_value`, `required`, `must_not_equal`)
-- **Load any repo** — point at a GitHub URL and swap the graph on the fly, no restart needed
 
 ## Install
 
@@ -128,7 +127,6 @@ Add to `.cursor/mcp.json`:
 | `get_conventions` | How a resource type is configured across the codebase |
 | `simulate_impact` | Parse proposed HCL → blast radius, policy violations, reversibility context |
 | `describe_live_state` | Compare Terraform state vs live AWS — detect drift |
-| `load_repo` | Clone a GitHub repo and reload the graph without restarting |
 | `dump_graph` | Full graph snapshot — all resources, edges, and policy violations |
 
 See [docs/TOOLS.md](docs/TOOLS.md) for full parameter and response documentation.
