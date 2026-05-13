@@ -31,7 +31,7 @@ type RenderFunc func(ctx context.Context) (path string, dir string, resourceCoun
 // state sources have been discovered.
 type StateSourcesFunc func() []ingest.StateSourceStatus
 
-func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, policies []policy.Policy, render RenderFunc, stateSources StateSourcesFunc) *server.MCPServer {
+func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, engine policy.Engine, render RenderFunc, stateSources StateSourcesFunc) *server.MCPServer {
 	s := server.NewMCPServer(
 		"casper",
 		"0.1.0",
@@ -641,7 +641,7 @@ Other tools available: find_similar (HCL examples), get_module_for (reusable mod
 						}
 					}
 					var viols []policy.Violation
-					if len(policies) > 0 {
+					if engine != nil {
 						// Code-scanned resources store HCL arg values under
 						// attributes.arguments; state-derived ones store them at
 						// the top level. Prefer the nested map when present.
@@ -654,7 +654,7 @@ Other tools available: find_similar (HCL examples), get_module_for (reusable mod
 								}
 							}
 						}
-						viols = policy.Check(policies, r.Type, r.Identifier, args, tags)
+						viols = engine.Check(r.Type, r.Identifier, args, tags)
 					}
 					resources = append(resources, ResourceEntry{
 						ID:         r.ID,

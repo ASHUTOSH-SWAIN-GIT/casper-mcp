@@ -55,7 +55,7 @@ func testSnapshot() graph.GraphSnapshot {
 }
 
 func noQuerier() graph.Querier             { return graph.NewMemStore(graph.GraphSnapshot{}) }
-func noPolicies() []policy.Policy          { return nil }
+func noPolicies() policy.Engine            { return policy.NewYAMLEngine(nil) }
 func noWorkflowRules() []workflow.WorkflowRule { return nil }
 
 func TestSimulateImpact_Create(t *testing.T) {
@@ -302,7 +302,7 @@ func TestSimulateImpact_PolicyViolation(t *testing.T) {
 		Message:  "must have deletion_protection",
 	}}
 
-	result, err := ingest.SimulateImpact(snapshot, noQuerier(), policies, noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), policy.NewYAMLEngine(policies), noWorkflowRules(), `
 resource "aws_db_instance" "new_db" {
   engine         = "postgres"
   instance_class = "db.t3.small"
@@ -331,7 +331,7 @@ func TestSimulateImpact_PolicyPass(t *testing.T) {
 		Message:  "must have deletion_protection",
 	}}
 
-	result, err := ingest.SimulateImpact(snapshot, noQuerier(), policies, noWorkflowRules(), `
+	result, err := ingest.SimulateImpact(snapshot, noQuerier(), policy.NewYAMLEngine(policies), noWorkflowRules(), `
 resource "aws_db_instance" "new_db" {
   engine              = "postgres"
   instance_class      = "db.t3.small"

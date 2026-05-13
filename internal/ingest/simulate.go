@@ -24,7 +24,7 @@ import (
 // current snapshot, and returns which resources would be created or modified,
 // what the downstream blast radius is, broken-reference warnings, and similar
 // examples from the repo for each proposed resource type.
-func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies []policy.Policy, workflowRules []workflow.WorkflowRule, proposedCode string) (*graph.ImpactResult, error) {
+func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, engine policy.Engine, workflowRules []workflow.WorkflowRule, proposedCode string) (*graph.ImpactResult, error) {
 	// Write proposed code to a temp dir so the HCL parser can read it
 	tmpDir, err := os.MkdirTemp("", "casper-sim-*")
 	if err != nil {
@@ -189,17 +189,19 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, policies
 
 	// Policy violations: check created and modified resources against org policies
 	var policyViolations []graph.PolicyViolation
-	for _, prop := range proposed {
-		args, _ := prop.Attributes["arguments"].(map[string]string)
-		tags := flattenTags(prop.Tags)
-		for _, v := range policy.Check(policies, prop.Type, prop.Identifier, args, tags) {
-			policyViolations = append(policyViolations, graph.PolicyViolation{
-				PolicyID: v.PolicyID,
-				Resource: v.Resource,
-				Type:     v.Type,
-				Message:  v.Message,
-				Details:  v.Details,
-			})
+	if engine != nil {
+		for _, prop := range proposed {
+			args, _ := prop.Attributes["arguments"].(map[string]string)
+			tags := flattenTags(prop.Tags)
+			for _, v := range engine.Check(prop.Type, prop.Identifier, args, tags) {
+				policyViolations = append(policyViolations, graph.PolicyViolation{
+					PolicyID: v.PolicyID,
+					Resource: v.Resource,
+					Type:     v.Type,
+					Message:  v.Message,
+					Details:  v.Details,
+				})
+			}
 		}
 	}
 

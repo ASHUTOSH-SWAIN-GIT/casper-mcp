@@ -386,6 +386,48 @@ func TestE2E_FindResource_ExtractsTags(t *testing.T) {
 	}
 }
 
+func TestE2E_RegoPolicyFires(t *testing.T) {
+	// Point Casper at a fixture that contains a .rego policy denying
+	// aws_s3_bucket. simulate_impact a new bucket → expect the rego rule to
+	// fire, with policy details indicating the rego source path.
+	dir := filepath.Clean(filepath.Join(repoRoot, "tests", "testdata", "e2e-rego"))
+	c := newClientWithDir(t, dir)
+
+	hcl := `
+resource "aws_s3_bucket" "data" {
+  bucket = "my-bucket"
+}`
+	res := callTool(t, c, "simulate_impact", map[string]any{"code": hcl})
+
+	body := textContent(res)
+	if !strings.Contains(body, "policy_violations") {
+		t.Fatalf("expected policy_violations in simulate_impact response, got:\n%s", body)
+	}
+
+	var result struct {
+		PolicyViolations []struct {
+			PolicyID string `json:"policy_id"`
+			Resource string `json:"resource"`
+			Type     string `json:"type"`
+			Message  string `json:"message"`
+		} `json:"policy_violations"`
+	}
+	unmarshalJSON(t, res, &result)
+
+	if len(result.PolicyViolations) == 0 {
+		t.Fatalf("expected at least one rego violation, got 0. body:\n%s", body)
+	}
+	var fired bool
+	for _, v := range result.PolicyViolations {
+		if v.Type == "aws_s3_bucket" && strings.Contains(v.Message, "disallowed") {
+			fired = true
+		}
+	}
+	if !fired {
+		t.Errorf("rego deny rule didn't fire on aws_s3_bucket. violations: %+v", result.PolicyViolations)
+	}
+}
+
 func TestE2E_DumpGraph(t *testing.T) {
 	c := newClient(t)
 	res := callTool(t, c, "dump_graph", map[string]any{})

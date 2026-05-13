@@ -26,6 +26,7 @@ import (
 	mcpserver "github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/mcp"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/migrations"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
+	regopkg "github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy/rego"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ui"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/workflow"
 )
@@ -186,9 +187,13 @@ func runServe(ctx context.Context, args []string) error {
 
 	liveStore := graph.NewLiveStore(snapshot)
 
-	policies, err := policy.Load(absDir)
+	// Pick the policy engine. If the repo has any .rego files anywhere we
+	// treat them as the authoritative policy source and disable yaml policies
+	// for this session. Otherwise we fall back to the legacy yaml engine
+	// (no-op when .casper/policies.yaml is absent).
+	engine, err := loadPolicyEngine(ctx, absDir)
 	if err != nil {
-		log.Printf("casper: policy load warning: %v", err)
+		return fmt.Errorf("load policy engine: %w", err)
 	}
 
 	workflowRules, err := workflow.Load(absDir)
@@ -197,7 +202,7 @@ func runServe(ctx context.Context, args []string) error {
 	}
 
 	simulate := func(code string) (*graph.ImpactResult, error) {
-		return ingest.SimulateImpact(liveStore.Snapshot(), liveStore, policies, workflowRules, code)
+		return ingest.SimulateImpact(liveStore.Snapshot(), liveStore, engine, workflowRules, code)
 	}
 
 	var awsClient *awslive.Client
@@ -317,7 +322,7 @@ func runServe(ctx context.Context, args []string) error {
 		}
 	}()
 
-	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies, renderHTML, getStateSources)
+	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, engine, renderHTML, getStateSources)
 	log.Printf("casper: serving %s over stdio (graph render is lazy — triggered by render_graph / /casper)", absDir)
 	return server.ServeStdio(mcpSrv)
 }
@@ -732,6 +737,39 @@ func registerGlobalMCPServerWithClaude() error {
 
 	fmt.Println("registered casper in Claude Code user MCP scope")
 	return nil
+}
+
+// loadPolicyEngine picks the right policy backend for the scanned repo.
+// Auto-discovery: any .rego file under absDir → Rego engine (yaml ignored).
+// No .rego files → YAML engine from .casper/policies.yaml (no-op if absent).
+func loadPolicyEngine(ctx context.Context, absDir string) (policy.Engine, error) {
+	regoFiles, err := regopkg.Discover(absDir)
+	if err != nil {
+		log.Printf("casper: rego discovery warning: %v", err)
+	}
+
+	if len(regoFiles) > 0 {
+		e, err := regopkg.NewEngine(ctx, regoFiles)
+		if err != nil {
+			// User's .rego files don't compile — fail loud rather than
+			// silently fall back to yaml. Broken policies should be visible.
+			return nil, fmt.Errorf("compile rego policies: %w", err)
+		}
+		log.Printf("casper: loaded %d rego policies — yaml policies disabled", len(regoFiles))
+		for _, f := range regoFiles {
+			log.Printf("casper:   - %s", f.Path)
+		}
+		return e, nil
+	}
+
+	yamlPolicies, err := policy.Load(absDir)
+	if err != nil {
+		log.Printf("casper: yaml policy load warning: %v", err)
+	}
+	if len(yamlPolicies) > 0 {
+		log.Printf("casper: loaded %d yaml policies", len(yamlPolicies))
+	}
+	return policy.NewYAMLEngine(yamlPolicies), nil
 }
 
 func usage() error {
