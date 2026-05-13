@@ -755,11 +755,7 @@ func loadPolicyEngine(ctx context.Context, absDir string) (policy.Engine, error)
 			// silently fall back to yaml. Broken policies should be visible.
 			return nil, fmt.Errorf("compile rego policies: %w", err)
 		}
-		mode := "repo-wide"
-		if regopkg.IsCasperPolicyDir(absDir) {
-			mode = ".casper/policies/"
-		}
-		log.Printf("casper: loaded %d rego policies from %s — yaml policies disabled", len(regoFiles), mode)
+		log.Printf("casper: loaded %d rego policies — yaml policies disabled", len(regoFiles))
 		for _, f := range regoFiles {
 			log.Printf("casper:   - %s", f.Path)
 		}

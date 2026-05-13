@@ -3,7 +3,6 @@ package rego_test
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	regopkg "github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy/rego"
@@ -113,77 +112,43 @@ func TestDiscover_EmptyDir(t *testing.T) {
 	}
 }
 
-func TestDiscover_CasperPolicyDirIsExclusive(t *testing.T) {
-	// When .casper/policies/ exists with rego files, repo-wide rego files
-	// elsewhere should NOT be picked up. This is the explicit "Casper
-	// policies live here" path that wins over the recursive walk.
+func TestDiscover_UnionsAcrossDirectories(t *testing.T) {
+	// Every .rego file in the repo should fire — .casper/policies/ is just
+	// a recommended location, not a special one. Drop policies wherever
+	// (Conftest's policy/, Casper's .casper/policies/, deep nested dirs) and
+	// Casper picks up all of them.
 	root := t.TempDir()
 
-	if err := os.MkdirAll(filepath.Join(root, ".casper", "policies"), 0o755); err != nil {
-		t.Fatal(err)
+	files := map[string]string{
+		".casper/policies/casper.rego":     "package policy\ndeny[m] { m := \"casper\" }",
+		"policy/conftest.rego":             "package policy\ndeny[m] { m := \"conftest\" }",
+		"modules/security/nested.rego":     "package policy\ndeny[m] { m := \"nested\" }",
 	}
-	if err := os.WriteFile(filepath.Join(root, ".casper", "policies", "in_casper.rego"),
-		[]byte("package policy\ndeny[m] { m := \"casper\" }"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Put a "competing" rego file at the repo root that should be ignored
-	// when the convention dir is active.
-	if err := os.MkdirAll(filepath.Join(root, "policy"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "policy", "outside.rego"),
-		[]byte("package policy\ndeny[m] { m := \"outside\" }"), 0o644); err != nil {
-		t.Fatal(err)
+	for rel, content := range files {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	files, err := regopkg.Discover(root)
+	got, err := regopkg.Discover(root)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("expected 1 file (only .casper/policies/), got %d: %+v", len(files), files)
-	}
-	if !strings.Contains(files[0].Path, ".casper/policies/in_casper.rego") {
-		t.Errorf("expected in_casper.rego, got %s", files[0].Path)
+	if len(got) != len(files) {
+		t.Fatalf("expected %d files (union of all locations), got %d", len(files), len(got))
 	}
 
-	if !regopkg.IsCasperPolicyDir(root) {
-		t.Error("IsCasperPolicyDir: expected true when .casper/policies/ has rego files")
+	gotPaths := map[string]bool{}
+	for _, f := range got {
+		gotPaths[filepath.Base(f.Path)] = true
 	}
-}
-
-func TestDiscover_EmptyCasperPolicyDirFallsBack(t *testing.T) {
-	// An empty .casper/policies/ directory should be treated as a placeholder.
-	// Casper falls back to recursive repo walk rather than serving zero
-	// policies.
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".casper", "policies"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "policy"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "policy", "x.rego"),
-		[]byte("package policy"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	files, err := regopkg.Discover(root)
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	if len(files) != 1 {
-		t.Fatalf("expected fallback to find 1 file, got %d", len(files))
-	}
-
-	if regopkg.IsCasperPolicyDir(root) {
-		t.Error("IsCasperPolicyDir: expected false for empty .casper/policies/")
-	}
-}
-
-func TestIsCasperPolicyDir_Missing(t *testing.T) {
-	if regopkg.IsCasperPolicyDir(t.TempDir()) {
-		t.Error("expected false for repo without .casper/policies/")
+	for _, want := range []string{"casper.rego", "conftest.rego", "nested.rego"} {
+		if !gotPaths[want] {
+			t.Errorf("expected %s in union, got: %v", want, gotPaths)
+		}
 	}
 }
