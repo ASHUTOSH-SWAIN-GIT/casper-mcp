@@ -22,6 +22,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/config"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest/terraformcode"
 	mcpserver "github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/mcp"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/migrations"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
@@ -128,9 +129,59 @@ func runServe(ctx context.Context, args []string) error {
 		return err
 	}
 
-	snapshot, err := ingest.Scan(absDir)
+	// Load cloud.aws up front so both describe_live_state (awsClient below)
+	// and S3 backend state fetching share the same credentials.
+	awsCfg, awsConfigured, awsErr := awslive.LoadConfig(absDir)
+	if awsErr != nil {
+		log.Printf("casper: cloud config warning: %v", awsErr)
+	}
+
+	// discoverRemotes scans .tf files for `terraform { backend "s3" {} }`
+	// blocks and returns a StateSource per backend. Called fresh on each scan
+	// so edits that add/remove backend blocks are picked up without a
+	// server restart.
+	discoverRemotes := func() []ingest.StateSource {
+		backends, err := terraformcode.FindS3Backends(absDir)
+		if err != nil {
+			log.Printf("casper: backend discovery warning: %v", err)
+			return nil
+		}
+		if len(backends) == 0 {
+			return nil
+		}
+		log.Printf("casper: detected %d S3 backend(s)", len(backends))
+		sources := make([]ingest.StateSource, 0, len(backends))
+		for _, b := range backends {
+			b := b
+			sources = append(sources, ingest.StateSource{
+				Type:       "s3",
+				Identity:   fmt.Sprintf("s3://%s/%s", b.Bucket, b.Key),
+				Bucket:     b.Bucket,
+				Key:        b.Key,
+				Region:     b.Region,
+				DeclaredIn: b.Source,
+				Fetch: func(ctx context.Context) ([]byte, error) {
+					return awslive.FetchS3State(ctx, awsCfg, b.Bucket, b.Key, b.Region)
+				},
+			})
+		}
+		return sources
+	}
+
+	snapshot, statuses, err := ingest.ScanWithRemoteStates(ctx, absDir, discoverRemotes())
 	if err != nil {
 		return fmt.Errorf("scan %s: %w", absDir, err)
+	}
+
+	// stateSourceStatuses is kept fresh on every rescan so the
+	// list_state_sources MCP tool always returns the latest fetch results.
+	var stateSourceStatuses atomic.Pointer[[]ingest.StateSourceStatus]
+	stateSourceStatuses.Store(&statuses)
+	getStateSources := func() []ingest.StateSourceStatus {
+		if p := stateSourceStatuses.Load(); p != nil {
+			return *p
+		}
+		return nil
 	}
 
 	liveStore := graph.NewLiveStore(snapshot)
@@ -150,9 +201,7 @@ func runServe(ctx context.Context, args []string) error {
 	}
 
 	var awsClient *awslive.Client
-	if awsCfg, ok, err := awslive.LoadConfig(absDir); err != nil {
-		log.Printf("casper: cloud config warning: %v", err)
-	} else if ok {
+	if awsConfigured {
 		if c, err := awslive.NewClient(ctx, awsCfg); err != nil {
 			log.Printf("casper: AWS client init failed: %v", err)
 		} else {
@@ -227,11 +276,12 @@ func runServe(ctx context.Context, args []string) error {
 				}
 			case <-debounce:
 				debounce = nil
-				fresh, err := ingest.Scan(absDir)
+				fresh, freshStatuses, err := ingest.ScanWithRemoteStates(ctx, absDir, discoverRemotes())
 				if err != nil {
 					log.Printf("casper: rescan failed: %v", err)
 					continue
 				}
+				stateSourceStatuses.Store(&freshStatuses)
 				liveStore.Reload(fresh)
 				log.Printf("casper: reloaded %d resources", len(fresh.Resources))
 				// Only refresh the HTML if it has been rendered at least
@@ -267,7 +317,7 @@ func runServe(ctx context.Context, args []string) error {
 		}
 	}()
 
-	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies, renderHTML)
+	mcpSrv := mcpserver.New(liveStore, simulate, awsClient, policies, renderHTML, getStateSources)
 	log.Printf("casper: serving %s over stdio (graph render is lazy — triggered by render_graph / /casper)", absDir)
 	return server.ServeStdio(mcpSrv)
 }

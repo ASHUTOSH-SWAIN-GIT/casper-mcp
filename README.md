@@ -200,15 +200,10 @@ casper-mcp/
 │   ├── config/            Config loader
 │   └── migrations/        Postgres schema migrations
 ├── migrations/            SQL migration files
-├── tests/                 All Go tests (mirrors internal/ package layout)
-├── docs/                  TOOLS.md, POLICIES.md, prd.md, DEVELOPMENT.md, test-repos.md
-├── npm/                   npm wrapper that downloads the right binary
-└── fixtures/              Sample Terraform state for tests
+├── tests/                 All Go tests + shared Terraform fixtures under tests/testdata/
+├── docs/                  TOOLS.md, POLICIES.md, prd.md, test-repos.md
+└── npm/                   npm wrapper that downloads the right binary
 ```
-
-## Development
-
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for running Casper locally against a Postgres-backed graph (used for the optional UI mode).
 
 ## License
 

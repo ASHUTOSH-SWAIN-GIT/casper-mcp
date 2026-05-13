@@ -37,7 +37,7 @@ func setup() error {
 		return err
 	}
 	repoRoot = filepath.Clean(filepath.Join(wd, "..", ".."))
-	fixtureDir = filepath.Join(wd, "testdata")
+	fixtureDir = filepath.Clean(filepath.Join(wd, "..", "testdata", "e2e"))
 
 	if p := os.Getenv("CASPER_MCP_BIN"); p != "" {
 		binaryPath = p
@@ -131,7 +131,7 @@ func TestE2E_Initialize(t *testing.T) {
 		t.Fatalf("list tools: %v", err)
 	}
 
-	want := []string{"get_context", "find_resource", "find_similar", "get_module_for", "get_conventions", "get_dependencies", "simulate_impact", "dump_graph"}
+	want := []string{"get_context", "find_resource", "find_similar", "get_module_for", "get_conventions", "get_dependencies", "simulate_impact", "dump_graph", "list_state_sources"}
 	got := map[string]bool{}
 	for _, tool := range tools.Tools {
 		got[tool.Name] = true
@@ -140,6 +140,78 @@ func TestE2E_Initialize(t *testing.T) {
 		if !got[name] {
 			t.Errorf("expected tool %q in tool list", name)
 		}
+	}
+}
+
+// newClientWithDir spawns the server pointed at an arbitrary fixture dir.
+// Used by tests that need a non-default fixture (e.g. state-source discovery).
+func newClientWithDir(t *testing.T, dir string) *client.Client {
+	t.Helper()
+	c, err := client.NewStdioMCPClient(binaryPath, nil, "serve", "--dir", dir)
+	if err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	initReq := mcp.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcp.Implementation{Name: "casper-e2e", Version: "0.0.0"}
+	if _, err := c.Initialize(ctx, initReq); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	return c
+}
+
+func TestE2E_ListStateSources_NoBackends(t *testing.T) {
+	// Default fixture has no `backend "s3"` blocks — tool should return the
+	// "no remote backends discovered" message.
+	c := newClient(t)
+	res := callTool(t, c, "list_state_sources", map[string]any{})
+	body := textContent(res)
+	if !strings.Contains(body, "No remote state backends discovered") {
+		t.Errorf("expected 'no remote backends' message, got:\n%s", body)
+	}
+}
+
+func TestE2E_ListStateSources_DetectsBackend(t *testing.T) {
+	// Fixture has one `backend "s3"` block pointing at a bucket that doesn't
+	// exist — the server should detect it, attempt the fetch, and report
+	// status="failed" with an error message. No real AWS access needed:
+	// either AccessDenied or NoSuchBucket is fine, both prove the path works.
+	dir := filepath.Clean(filepath.Join(repoRoot, "tests", "testdata", "e2e-state-sources"))
+	c := newClientWithDir(t, dir)
+
+	res := callTool(t, c, "list_state_sources", map[string]any{})
+
+	var payload struct {
+		Total   int                         `json:"total"`
+		Loaded  int                         `json:"loaded"`
+		Failed  int                         `json:"failed"`
+		Sources []map[string]any            `json:"sources"`
+	}
+	unmarshalJSON(t, res, &payload)
+
+	if payload.Total != 1 {
+		t.Fatalf("expected 1 source, got %d. body:\n%s", payload.Total, textContent(res))
+	}
+	s := payload.Sources[0]
+	if s["bucket"] != "casper-e2e-bucket-does-not-exist" {
+		t.Errorf("bucket: got %v", s["bucket"])
+	}
+	if s["key"] != "test.tfstate" {
+		t.Errorf("key: got %v", s["key"])
+	}
+	if s["region"] != "us-east-1" {
+		t.Errorf("region: got %v", s["region"])
+	}
+	if s["status"] != "failed" {
+		t.Errorf("status: expected 'failed' for unreachable bucket, got %v", s["status"])
+	}
+	if s["error"] == "" || s["error"] == nil {
+		t.Error("expected error string on failed fetch")
 	}
 }
 

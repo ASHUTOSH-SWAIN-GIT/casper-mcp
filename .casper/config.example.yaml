@@ -4,7 +4,7 @@ database:
 states:
   - type: local
     paths:
-      - fixtures/terraform.tfstate
+      - "**/*.tfstate"
 
 iac:
   paths:

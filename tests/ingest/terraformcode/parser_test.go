@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseDir(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "internal", "ingest", "terraformcode", "testdata", "modules", "postgres")
+	path := filepath.Join("..", "..", "testdata", "terraformcode", "modules", "postgres")
 	resources, err := terraformcode.ParseDir(path)
 	if err != nil {
 		t.Fatalf("ParseDir() error = %v", err)

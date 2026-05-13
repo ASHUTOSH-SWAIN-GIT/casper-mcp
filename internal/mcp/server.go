@@ -14,6 +14,7 @@ import (
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/awslive"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/graph"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/policy"
 )
 
@@ -24,7 +25,13 @@ type SimulateFunc func(code string) (*graph.ImpactResult, error)
 // Passed as nil when no HTML rendering is configured.
 type RenderFunc func(ctx context.Context) (path string, dir string, resourceCount int, edgeCount int, err error)
 
-func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, policies []policy.Policy, render RenderFunc) *server.MCPServer {
+// StateSourcesFunc returns the latest per-source fetch status for remote
+// Terraform state files (S3 backends, future TFC, etc.). Backed by an atomic
+// in main.go so every call reflects the freshest scan. Nil when no remote
+// state sources have been discovered.
+type StateSourcesFunc func() []ingest.StateSourceStatus
+
+func New(store graph.Querier, simulate SimulateFunc, awsClient *awslive.Client, policies []policy.Policy, render RenderFunc, stateSources StateSourcesFunc) *server.MCPServer {
 	s := server.NewMCPServer(
 		"casper",
 		"0.1.0",
@@ -38,7 +45,7 @@ Recommended workflow:
 4. Use dump_graph only for full audits or visualizations. Don't dump and re-parse.
 5. Before presenting authored Terraform, call simulate_impact — it returns blast radius, broken refs, similar examples, reversibility, and policy violations.
 
-Other tools available: find_similar (HCL examples), get_module_for (reusable modules), get_conventions (codebase patterns), get_dependencies (graph walk), describe_live_state (AWS drift), render_graph (interactive HTML).`),
+Other tools available: find_similar (HCL examples), get_module_for (reusable modules), get_conventions (codebase patterns), get_dependencies (graph walk), describe_live_state (AWS drift), render_graph (interactive HTML), list_state_sources (which remote S3 backends loaded).`),
 	)
 
 	s.AddTool(
@@ -509,6 +516,49 @@ Other tools available: find_similar (HCL examples), get_module_for (reusable mod
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 
+				return mcp.NewToolResultText(string(payload)), nil
+			},
+		)
+	}
+
+	// list_state_sources: surface what remote state backends Casper detected
+	// and whether the last fetch succeeded. Lets the agent explain to the user
+	// when state is missing (e.g. AccessDenied on a specific S3 key) instead
+	// of silently producing a graph with gaps.
+	if stateSources != nil {
+		s.AddTool(
+			mcp.NewTool(
+				"list_state_sources",
+				mcp.WithDescription("List every remote Terraform state backend Casper discovered in this repo's .tf files, with the last fetch status. Use this when:\n- The user asks what state Casper is seeing.\n- A resource the user expects is missing from the graph — check whether its state file failed to load (AccessDenied, NoSuchKey, etc.).\n- You want to confirm the graph reflects remote state, not just declared HCL.\n\nReturns one entry per backend (currently `s3` only) with bucket/key/region, the .tf file declaring it, and `status: \"loaded\"|\"failed\"`. Failed entries include the error string verbatim so you can suggest a fix (typically AWS auth)."),
+				mcp.WithTitleAnnotation("List State Sources"),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithDestructiveHintAnnotation(false),
+				mcp.WithIdempotentHintAnnotation(true),
+			),
+			func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				sources := stateSources()
+				if len(sources) == 0 {
+					return mcp.NewToolResultText("No remote state backends discovered. Casper falls back to local .tfstate files (if any) and code-only graph construction. If you expected state to be loaded, check that the repo has `terraform { backend \"s3\" {} }` blocks in its .tf files."), nil
+				}
+
+				loaded, failed := 0, 0
+				for _, st := range sources {
+					if st.Status == "loaded" {
+						loaded++
+					} else {
+						failed++
+					}
+				}
+
+				payload, err := json.MarshalIndent(map[string]any{
+					"total":   len(sources),
+					"loaded":  loaded,
+					"failed":  failed,
+					"sources": sources,
+				}, "", "  ")
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
 				return mcp.NewToolResultText(string(payload)), nil
 			},
 		)

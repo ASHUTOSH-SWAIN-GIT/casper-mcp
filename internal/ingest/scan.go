@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
@@ -17,9 +19,50 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper-mcp/internal/ingest/terraformstate"
 )
 
+// StateSource describes a remote Terraform state file Casper will fetch.
+// The agent-facing list_state_sources tool surfaces these so users can see
+// what Casper picked up from their `terraform { backend "..." {} }` blocks.
+type StateSource struct {
+	Type       string // "s3"
+	Identity   string // e.g. "s3://bucket/key" — also recorded on each resource's Source field
+	Bucket     string // s3-specific
+	Key        string // s3-specific
+	Region     string // s3-specific (may be empty)
+	DeclaredIn string // path of the .tf file that declared the backend
+	// Fetch returns the state bytes for this source.
+	Fetch func(ctx context.Context) ([]byte, error)
+}
+
+// StateSourceStatus is the per-source result of the last fetch attempt.
+// Returned alongside the snapshot from ScanWithRemoteStates and surfaced
+// to agents via the list_state_sources MCP tool.
+type StateSourceStatus struct {
+	Type          string `json:"type"`
+	Identity      string `json:"identity"`
+	Bucket        string `json:"bucket,omitempty"`
+	Key           string `json:"key,omitempty"`
+	Region        string `json:"region,omitempty"`
+	DeclaredIn    string `json:"declared_in,omitempty"`
+	Status        string `json:"status"`           // "loaded" | "failed"
+	Error         string `json:"error,omitempty"`  // populated when Status == "failed"
+	ResourceCount int    `json:"resource_count"`
+	EdgeCount     int    `json:"edge_count"`
+}
+
 // Scan parses Terraform state and code under dir and returns a GraphSnapshot
-// without requiring a database.
+// without requiring a database. Equivalent to ScanWithRemoteStates with no
+// remote sources — kept for tests and callers that only want local files.
 func Scan(dir string) (graph.GraphSnapshot, error) {
+	snap, _, err := ScanWithRemoteStates(context.Background(), dir, nil)
+	return snap, err
+}
+
+// ScanWithRemoteStates is Scan plus remote state fetching. Local .tfstate
+// files are read first, then every remote source is fetched in parallel
+// (capped at 8 concurrent). All results merge into a single GraphSnapshot.
+// The returned statuses describe what was attempted and whether it worked,
+// one entry per source — surfaced to agents through list_state_sources.
+func ScanWithRemoteStates(ctx context.Context, dir string, sources []StateSource) (graph.GraphSnapshot, []StateSourceStatus, error) {
 	var snapshot graph.GraphSnapshot
 
 	stateFiles, _ := doublestar.FilepathGlob(filepath.Join(filepath.Clean(dir), "**/*.tfstate"))
@@ -29,19 +72,27 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 			log.Printf("casper: skipping state file %s: %v", f, err)
 			continue
 		}
-		// Backfill Provider on state-derived resources too.
-		for i := range result.Resources {
-			if result.Resources[i].Provider == "" {
-				result.Resources[i].Provider = terraformcode.ProviderFromType(result.Resources[i].Type)
-			}
-		}
+		backfillProvider(result.Resources)
 		snapshot.Resources = append(snapshot.Resources, result.Resources...)
 		snapshot.Dependencies = append(snapshot.Dependencies, result.Dependencies...)
 	}
 
+	// Remote state fetches run in parallel — typically S3 GetObject, which is
+	// network-bound and benefits from concurrency. Cap matches the
+	// /Users/lowkeydev/code/infrastructure shape (6 backends) with headroom.
+	var statuses []StateSourceStatus
+	if len(sources) > 0 {
+		var remoteResults []terraformstate.Result
+		remoteResults, statuses = fetchRemoteStates(ctx, sources)
+		for _, r := range remoteResults {
+			snapshot.Resources = append(snapshot.Resources, r.Resources...)
+			snapshot.Dependencies = append(snapshot.Dependencies, r.Dependencies...)
+		}
+	}
+
 	moduleDirs, err := findModuleDirs(dir)
 	if err != nil {
-		return snapshot, err
+		return snapshot, statuses, err
 	}
 
 	// Include downloaded child modules from any terraform init that has been run.
@@ -97,7 +148,73 @@ func Scan(dir string) (graph.GraphSnapshot, error) {
 	}
 	snapshot.Dependencies = resolved
 
-	return snapshot, nil
+	return snapshot, statuses, nil
+}
+
+// backfillProvider sets r.Provider on every resource that doesn't have one,
+// derived from the resource type. State-derived resources don't get a
+// provider set by the state parser.
+func backfillProvider(resources []graph.Resource) {
+	for i := range resources {
+		if resources[i].Provider == "" {
+			resources[i].Provider = terraformcode.ProviderFromType(resources[i].Type)
+		}
+	}
+}
+
+// fetchRemoteStates runs every source's Fetch concurrently (max 8 at a time),
+// parses each successful response, and returns both the parsed results and a
+// per-source status entry. Per-fetcher errors are logged but never fail the
+// whole scan — a missing or permission-denied state file shouldn't take down
+// the server.
+func fetchRemoteStates(ctx context.Context, sources []StateSource) ([]terraformstate.Result, []StateSourceStatus) {
+	const maxConcurrent = 8
+	sem := make(chan struct{}, maxConcurrent)
+	results := make([]terraformstate.Result, len(sources))
+	statuses := make([]StateSourceStatus, len(sources))
+	var wg sync.WaitGroup
+
+	for i := range sources {
+		src := sources[i]
+		statuses[i] = StateSourceStatus{
+			Type:       src.Type,
+			Identity:   src.Identity,
+			Bucket:     src.Bucket,
+			Key:        src.Key,
+			Region:     src.Region,
+			DeclaredIn: src.DeclaredIn,
+		}
+		wg.Add(1)
+		go func(idx int, s StateSource) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			data, err := s.Fetch(ctx)
+			if err != nil {
+				log.Printf("casper: remote state fetch failed (%s): %v", s.Identity, err)
+				statuses[idx].Status = "failed"
+				statuses[idx].Error = err.Error()
+				return
+			}
+			parsed, err := terraformstate.ParseBytes(data, s.Identity)
+			if err != nil {
+				log.Printf("casper: remote state parse failed (%s): %v", s.Identity, err)
+				statuses[idx].Status = "failed"
+				statuses[idx].Error = err.Error()
+				return
+			}
+			backfillProvider(parsed.Resources)
+			log.Printf("casper: loaded %d resources, %d edges from %s",
+				len(parsed.Resources), len(parsed.Dependencies), s.Identity)
+			results[idx] = parsed
+			statuses[idx].Status = "loaded"
+			statuses[idx].ResourceCount = len(parsed.Resources)
+			statuses[idx].EdgeCount = len(parsed.Dependencies)
+		}(i, src)
+	}
+	wg.Wait()
+	return results, statuses
 }
 
 // childModuleDirs reads .terraform/modules/modules.json next to each component
