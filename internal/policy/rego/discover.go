@@ -18,6 +18,12 @@ type RegoFile struct {
 	Bytes []byte
 }
 
+// CasperPolicyDir is the convention location for Casper-specific Rego
+// policies, symmetric with .casper/policies.yaml for the YAML engine.
+// When this directory exists with .rego files inside, Discover uses only
+// those — repo-wide walk is skipped.
+const CasperPolicyDir = ".casper/policies"
+
 // skipDir names directories Discover should not descend into. Mirrors the
 // existing scan-pipeline skip set so policy discovery agrees with module
 // discovery on what counts as "noise."
@@ -33,11 +39,49 @@ var skipDir = map[string]struct{}{
 	"testdata": {},
 }
 
-// Discover walks root recursively for *.rego files, skipping the
-// conventional noise directories. Result is sorted by path and deduped on
-// absolute path (which is naturally unique from a single walk, but we
-// resolve symlinks for safety).
+// Discover returns every .rego file Casper should treat as an active
+// policy. Discovery is ordered:
+//
+//  1. If <root>/.casper/policies/ exists and contains any .rego files,
+//     use only those (the Casper convention path — explicit user intent).
+//  2. Otherwise, walk the entire repo for .rego files (zero-config Conftest
+//     compatibility — drop policies anywhere).
+//
+// Both modes skip the conventional noise directories.
 func Discover(root string) ([]RegoFile, error) {
+	// Convention path first.
+	casperDir := filepath.Join(root, CasperPolicyDir)
+	if info, err := os.Stat(casperDir); err == nil && info.IsDir() {
+		files, err := walkRego(casperDir)
+		if err != nil {
+			return nil, err
+		}
+		if len(files) > 0 {
+			return files, nil
+		}
+		// Empty .casper/policies/ — fall through to repo-wide walk rather
+		// than serving zero policies. Treat an empty dir as a placeholder.
+	}
+
+	// Fallback: full repo walk.
+	return walkRego(root)
+}
+
+// IsCasperPolicyDir reports whether root contains a non-empty
+// .casper/policies/ directory. Used by the startup logs in main so we can
+// tell users which discovery mode fired.
+func IsCasperPolicyDir(root string) bool {
+	casperDir := filepath.Join(root, CasperPolicyDir)
+	info, err := os.Stat(casperDir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	files, err := walkRego(casperDir)
+	return err == nil && len(files) > 0
+}
+
+// walkRego is the shared per-directory walker used by both Discover modes.
+func walkRego(root string) ([]RegoFile, error) {
 	seen := map[string]struct{}{}
 	var out []RegoFile
 
