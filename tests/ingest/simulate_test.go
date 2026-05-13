@@ -160,6 +160,7 @@ resource "aws_db_instance" "orders" {
 	}
 	if rc == nil {
 		t.Fatal("aws_db_instance.orders not in reversibility context")
+		return
 	}
 	if rc.Operation != "modify" {
 		t.Errorf("expected operation=modify, got %s", rc.Operation)
@@ -433,6 +434,7 @@ func TestDiffArguments(t *testing.T) {
 	diff := ingest.DiffArguments(cur, prop)
 	if diff == nil {
 		t.Fatal("expected non-nil diff")
+		return
 	}
 	if _, ok := diff.Changed["instance_class"]; !ok {
 		t.Error("expected instance_class in Changed")
