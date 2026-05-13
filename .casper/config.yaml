@@ -1,11 +1,3 @@
-database:
-  url: postgres://casper:casper@localhost:55432/casper?sslmode=disable
-
-iac:
-  paths:
-    - /Users/lowkeydev/code/infrastructure/**/*.tf
-    - /Users/lowkeydev/code/terraform-aws-vpc/**/*.tf
-  module_dirs:
-    - /Users/lowkeydev/code/infrastructure/modules
-    - /Users/lowkeydev/code/infrastructure/services
-    - /Users/lowkeydev/code/terraform-aws-vpc/modules
+# Local dev config. The only section Casper reads is `cloud.aws`. Leaving it
+# empty here means Casper uses ambient AWS credentials and the default
+# us-east-1 region when it needs them.

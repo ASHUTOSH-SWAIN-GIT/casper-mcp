@@ -1,14 +1,17 @@
-database:
-  url: postgres://casper:casper@localhost:55432/casper?sslmode=disable
+# .casper/config.yaml is optional. The only section Casper reads today is
+# `cloud.aws`, which configures credentials for describe_live_state (drift
+# detection) and for fetching state files from S3 backends.
+#
+# Drop this file at the root of your Terraform repo if you need either.
 
-states:
-  - type: local
-    paths:
-      - "**/*.tfstate"
+cloud:
+  aws:
+    # Role to assume for all AWS describe / s3 GetObject calls. Omit to use
+    # ambient credentials (AWS_PROFILE, SSO, EC2/ECS/EKS instance role).
+    role_arn: arn:aws:iam::123456789012:role/casper-readonly
 
-iac:
-  paths:
-    - "modules/**/*.tf"
-    - "envs/**/*.tf"
-  module_dirs:
-    - modules/
+    # Regions to query for resources that exist regionally (RDS, EC2, S3, etc).
+    # Defaults to us-east-1 when omitted.
+    regions:
+      - us-east-1
+      - ap-south-1

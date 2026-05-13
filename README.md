@@ -189,17 +189,15 @@ casper-mcp/
 ├── cmd/casper-mcp/        CLI entry point
 ├── internal/
 │   ├── mcp/               MCP server + tool definitions
-│   ├── graph/             In-memory + Postgres graph stores
+│   ├── graph/             In-memory graph + query helpers
 │   ├── ingest/            Terraform .tf and .tfstate parsers
 │   │   ├── terraformcode/
 │   │   └── terraformstate/
-│   ├── awslive/           Read-only AWS Describe + drift detection
-│   ├── policy/            Policy rule engine
+│   ├── awslive/           Read-only AWS Describe + drift detection + S3 state fetch
+│   ├── policy/            Policy engine (YAML + Rego/OPA)
+│   │   └── rego/          OPA-backed engine
 │   ├── workflow/          Workflow routing rules
-│   ├── ui/                Static HTML graph exporter
-│   ├── config/            Config loader
-│   └── migrations/        Postgres schema migrations
-├── migrations/            SQL migration files
+│   └── ui/                Static HTML graph exporter
 ├── tests/                 All Go tests + shared Terraform fixtures under tests/testdata/
 ├── docs/                  TOOLS.md, POLICIES.md, prd.md, test-repos.md
 └── npm/                   npm wrapper that downloads the right binary
