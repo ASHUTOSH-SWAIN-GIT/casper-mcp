@@ -110,21 +110,22 @@ func SimulateImpact(current graph.GraphSnapshot, querier graph.Querier, engine p
 			continue // only care about new resources here
 		}
 		args, _ := prop.Attributes["arguments"].(map[string]string)
+		seenUpstream := map[string]bool{}
 		for _, expr := range args {
-			for ident, r := range currentByIdent {
-				key := "upstream:" + ident
-				if seen[key] {
+			for _, ref := range ExtractResourceRefs(expr) {
+				if seenUpstream[ref] {
 					continue
 				}
-				// Match "type.name." or "type.name[" — actual attribute/index access
-				if strings.Contains(expr, ident+".") || strings.Contains(expr, ident+"[") {
-					seen[key] = true
-					blast = append(blast, graph.BlastItem{
-						Identifier:   r.Identifier,
-						Type:         r.Type,
-						Relationship: prop.Identifier + " will reference this",
-					})
+				r, ok := currentByIdent[ref]
+				if !ok {
+					continue
 				}
+				seenUpstream[ref] = true
+				blast = append(blast, graph.BlastItem{
+					Identifier:   r.Identifier,
+					Type:         r.Type,
+					Relationship: prop.Identifier + " will reference this",
+				})
 			}
 		}
 	}

@@ -57,20 +57,23 @@ func FetchS3State(ctx context.Context, cfg AWSConfig, bucket, key, region string
 // same assume-role chain NewClient uses. Standalone so we can target a
 // region that wasn't pre-configured in cfg.Regions.
 func buildAWSConfig(ctx context.Context, cfg AWSConfig, region string) (aws.Config, error) {
-	baseCfg, err := config.LoadDefaultConfig(ctx)
+	baseCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("load default aws config: %w", err)
 	}
 
 	if cfg.RoleARN == "" {
-		// Ambient credentials, just with the right region.
-		return config.LoadDefaultConfig(ctx, config.WithRegion(region))
+		return baseCfg, nil
 	}
 
 	stsClient := sts.NewFromConfig(baseCfg)
 	provider := stscreds.NewAssumeRoleProvider(stsClient, cfg.RoleARN)
-	return config.LoadDefaultConfig(ctx,
+	assumed, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(region),
 		config.WithCredentialsProvider(provider),
 	)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("load assume-role aws config: %w", err)
+	}
+	return assumed, nil
 }

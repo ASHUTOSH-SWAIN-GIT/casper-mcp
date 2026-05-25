@@ -126,7 +126,7 @@ func ScanWithRemoteStates(ctx context.Context, dir string, sources []StateSource
 		resourcesByDir[clean] = append(resourcesByDir[clean], r.ID)
 	}
 
-	resolved := snapshot.Dependencies[:0]
+	resolved := make([]graph.Dependency, 0, len(snapshot.Dependencies))
 	for _, dep := range snapshot.Dependencies {
 		target, ok := strings.CutPrefix(dep.ToResource, terraformcode.ModuleEdgePlaceholder)
 		if !ok {
@@ -185,9 +185,9 @@ func fetchRemoteStates(ctx context.Context, sources []StateSource) ([]terraforms
 			DeclaredIn: src.DeclaredIn,
 		}
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(idx int, s StateSource) {
 			defer wg.Done()
-			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			data, err := s.Fetch(ctx)
